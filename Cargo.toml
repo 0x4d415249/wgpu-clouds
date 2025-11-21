@@ -1,13 +1,13 @@
 [package]
 name = "wgpu-clouds"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 
 [dependencies]
-winit = "0.29"
-wgpu = "0.20"
-pollster = "0.3"
-bytemuck = { version = "1.14", features = ["derive"] }
-cgmath = "0.18"
-env_logger = "0.11"
-log = "0.4"
+bytemuck = { version = "1.24.0", default-features = false, features = ["derive"] }
+cgmath = { version = "0.18.0", default-features = false }
+env_logger = { version = "0.11.8", default-features = false }
+log = { version = "0.4.28", default-features = false }
+pollster = { version = "0.4.0", default-features = false }
+wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "wgsl"] }
+winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "wayland"] }
