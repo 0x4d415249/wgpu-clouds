@@ -1,20 +1,36 @@
 use cgmath::prelude::*;
 use std::borrow::Cow;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use wgpu::util::DeviceExt;
-use winit::{
-    application::ApplicationHandler,
-    event::*,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{Window, WindowId},
-};
+use winit::application::ApplicationHandler;
+use winit::event::*;
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{Window, WindowId};
 
-// RENDER_SCALE: 0.5 = 50% resolution (Massive FPS boost)
 const RENDER_SCALE: f32 = 0.5;
+const RAIN_PARTICLES: u32 = 20000;
+
+fn random_f32(seed: &mut u32) -> f32 {
+    *seed = (*seed).wrapping_mul(1664525).wrapping_add(1013904223);
+    (*seed as f32) / (u32::MAX as f32)
+}
 
 fn lerp(start: f32, end: f32, speed: f32, dt: f32) -> f32 {
     start + (end - start) * (speed * dt).clamp(0.0, 1.0)
+}
+
+// FIX: Added smoothstep
+fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
+    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
+    t * t * (3.0 - 2.0 * t)
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct RainInstance {
+    offset: [f32; 3],
 }
 
 struct Camera {
@@ -39,43 +55,112 @@ impl Camera {
         let proj = cgmath::perspective(cgmath::Deg(75.0), aspect, 0.1, 4000.0);
         let (sin_pitch, cos_pitch) = cgmath::Rad::from(cgmath::Deg(self.pitch)).0.sin_cos();
         let (sin_yaw, cos_yaw) = cgmath::Rad::from(cgmath::Deg(self.yaw)).0.sin_cos();
-
         let forward =
             cgmath::Vector3::new(cos_pitch * cos_yaw, sin_pitch, cos_pitch * sin_yaw).normalize();
-
         let view = cgmath::Matrix4::look_to_rh(self.eye, forward, cgmath::Vector3::unit_y());
         let view_proj = proj * view;
         let inv_view_proj = view_proj.invert().unwrap_or(cgmath::Matrix4::identity());
-
         (view_proj, inv_view_proj)
     }
 }
 
 struct AtmosphereState {
-    current_time: f32,
-    current_weather: f32,
-    current_cloud_type: f32,
+    time: f32,
+    weather: f32,
+    cloud_type: f32,
+    lightning_intensity: f32,
+    lightning_pos: [f32; 3],
+    lightning_color: [f32; 3],
+    rain: f32,
+    wind: [f32; 2],
     target_time: f32,
     target_weather: f32,
     target_cloud_type: f32,
+    rng_seed: u32,
+    lightning_timer: f32,
+    weather_offset: f32,
+    target_weather_offset: f32,
+    sim_time: f32,
 }
 
 impl AtmosphereState {
     fn new() -> Self {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
         Self {
-            current_time: 0.1,
-            current_weather: 0.0,
-            current_cloud_type: 0.0,
-            target_time: 0.1,
+            time: 0.25,
+            weather: 0.0,
+            cloud_type: 0.0,
+            lightning_intensity: 0.0,
+            lightning_pos: [0.0, 150.0, 0.0],
+            lightning_color: [1.0, 1.0, 1.0],
+            rain: 0.0,
+            wind: [0.2, 0.1],
+            target_time: 0.25,
             target_weather: 0.0,
             target_cloud_type: 0.0,
+            rng_seed: seed,
+            lightning_timer: 2.0,
+            weather_offset: 0.0,
+            target_weather_offset: 0.0,
+            sim_time: 0.0,
         }
     }
 
-    fn update(&mut self, dt: f32) {
-        self.current_time = lerp(self.current_time, self.target_time, 1.0, dt);
-        self.current_weather = lerp(self.current_weather, self.target_weather, 1.0, dt);
-        self.current_cloud_type = lerp(self.current_cloud_type, self.target_cloud_type, 1.0, dt);
+    fn update(&mut self, dt: f32, camera_pos: [f32; 3]) {
+        let day_duration = 60.0;
+        self.time += dt / day_duration;
+        if self.time > 1.0 {
+            self.time -= 1.0;
+        }
+
+        self.sim_time += dt * 0.1;
+
+        // Auto Weather Noise
+        let w_noise = self.sim_time.sin()
+            + (self.sim_time * 2.3).cos() * 0.5
+            + (self.sim_time * 0.7).sin() * 0.2;
+        let auto_weather = (w_noise * 0.5 + 0.5).clamp(0.0, 1.0);
+
+        self.weather_offset = lerp(self.weather_offset, self.target_weather_offset, 1.0, dt);
+        let target_weather = (auto_weather + self.weather_offset).clamp(0.0, 1.0);
+        self.weather = lerp(self.weather, target_weather, 0.5, dt);
+
+        let t_noise = ((self.sim_time * 1.5).cos() * 0.5 + 0.5).clamp(0.0, 1.0);
+        self.cloud_type = lerp(self.cloud_type, t_noise, 0.5, dt);
+
+        let target_rain = smoothstep(0.6, 0.8, self.weather);
+        self.rain = lerp(self.rain, target_rain, 0.5, dt);
+
+        // Wind
+        let target_wind_x = (self.sim_time * 3.0).sin();
+        let target_wind_z = (self.sim_time * 2.5).cos();
+        let storm_boost = 1.0 + self.weather * 3.0;
+        self.wind[0] = lerp(self.wind[0], target_wind_x * storm_boost, 0.1, dt);
+        self.wind[1] = lerp(self.wind[1], target_wind_z * storm_boost, 0.1, dt);
+
+        if self.weather > 0.85 {
+            self.lightning_timer -= dt;
+            if self.lightning_timer <= 0.0 {
+                self.lightning_intensity = 1.0;
+                let rx = (random_f32(&mut self.rng_seed) - 0.5) * 4000.0;
+                let rz = (random_f32(&mut self.rng_seed) - 0.5) * 4000.0;
+                let ry = 140.0 + random_f32(&mut self.rng_seed) * 30.0;
+                self.lightning_pos = [camera_pos[0] + rx, ry, camera_pos[2] + rz];
+
+                let r = 0.6 + random_f32(&mut self.rng_seed) * 0.4;
+                let g = 0.6 + random_f32(&mut self.rng_seed) * 0.4;
+                let b = 1.0;
+                self.lightning_color = [r, g, b];
+
+                self.lightning_timer = 0.2 + random_f32(&mut self.rng_seed) * 3.0;
+            }
+        } else {
+            self.lightning_intensity = 0.0;
+        }
+        self.lightning_intensity = lerp(self.lightning_intensity, 0.0, 8.0, dt);
     }
 }
 
@@ -126,42 +211,28 @@ impl CameraController {
                 self.is_down_pressed = amount;
             }
 
+            KeyCode::ArrowUp if amount => {
+                atmos.target_weather_offset += 0.1;
+                println!("Stormier");
+            }
+            KeyCode::ArrowDown if amount => {
+                atmos.target_weather_offset -= 0.1;
+                println!("Clearer");
+            }
+
             KeyCode::KeyE if amount => {
-                atmos.target_time = 0.15;
-                atmos.target_weather = 0.0;
-                atmos.target_cloud_type = 0.0;
-                println!("Sunny");
+                atmos.target_weather_offset = -1.0;
+                println!("Force Clear");
             }
             KeyCode::KeyR if amount => {
-                atmos.target_time = 0.15;
-                atmos.target_weather = 0.6;
-                atmos.target_cloud_type = 1.0;
-                println!("Overcast");
+                atmos.target_weather_offset = 0.0;
+                println!("Neutral");
             }
             KeyCode::KeyT if amount => {
-                atmos.target_time = 0.15;
-                atmos.target_weather = 1.0;
-                atmos.target_cloud_type = 0.5;
-                println!("Storm");
+                atmos.target_weather_offset = 1.0;
+                println!("Force Storm");
             }
-            KeyCode::KeyY if amount => {
-                atmos.target_time = 0.23;
-                atmos.target_weather = 0.3;
-                atmos.target_cloud_type = 0.0;
-                println!("Sunset");
-            }
-            KeyCode::KeyU if amount => {
-                atmos.target_time = 0.5;
-                println!("Night");
-            }
-            KeyCode::KeyG if amount => {
-                atmos.target_cloud_type = 0.0;
-                println!("Cumulus");
-            }
-            KeyCode::KeyH if amount => {
-                atmos.target_cloud_type = 1.0;
-                println!("Stratus");
-            }
+
             _ => {}
         }
     }
@@ -177,7 +248,6 @@ impl CameraController {
         let forward = cgmath::Vector3::new(cos_yaw, 0.0, sin_yaw).normalize();
         let right = cgmath::Vector3::new(-sin_yaw, 0.0, cos_yaw).normalize();
         let up = cgmath::Vector3::unit_y();
-
         let mut velocity = cgmath::Vector3::zero();
         if self.is_forward_pressed {
             velocity += forward;
@@ -197,7 +267,6 @@ impl CameraController {
         if self.is_down_pressed {
             velocity -= up;
         }
-
         if velocity.magnitude2() > 0.0 {
             velocity = velocity.normalize();
         }
@@ -213,9 +282,19 @@ struct CameraUniform {
     camera_pos: [f32; 3],
     time: f32,
     day_progress: f32,
-    weather: f32,
+    weather_offset: f32, // Named correctly
     cloud_type: f32,
-    padding: f32,
+    lightning_intensity: f32,
+    lightning_pos: [f32; 3],
+    _padding1: f32,
+    lightning_color: [f32; 3],
+    // Pad 4 bytes here because `wind` (vec2) needs 8-byte alignment and `color` ended at offset that leaves 4 bytes gap
+    // lightning_color = 12 bytes. offset 176 -> 188.
+    // 188 is not 8-byte aligned. wind starts at 192.
+    _pad_col_to_wind: f32,
+    wind: [f32; 2],
+    rain: f32,
+    _pad_end: f32,
 }
 
 struct State {
@@ -224,21 +303,19 @@ struct State {
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
     size: winit::dpi::PhysicalSize<u32>,
-
     cloud_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
-
+    rain_pipeline: wgpu::RenderPipeline,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    camera_bind_group_layout: wgpu::BindGroupLayout,
-
+    // Removed unused layout field
+    rain_buffer: wgpu::Buffer,
     offscreen_texture: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
     offscreen_bind_group_layout: wgpu::BindGroupLayout,
     offscreen_bind_group: wgpu::BindGroup,
     offscreen_sampler: wgpu::Sampler,
-
     start_time: std::time::Instant,
     last_frame_time: std::time::Instant,
     camera: Camera,
@@ -263,6 +340,7 @@ impl State {
             })
             .await
             .unwrap();
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
@@ -280,9 +358,6 @@ impl State {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
-
-        // --- VSYNC LOGIC ---
-        // Try to find Immediate (VSync Off), fallback to Mailbox (Uncapped), fallback to Fifo (VSync On)
         let present_mode = [
             wgpu::PresentMode::Immediate,
             wgpu::PresentMode::Mailbox,
@@ -291,32 +366,38 @@ impl State {
         .into_iter()
         .find(|&mode| surface_caps.present_modes.contains(&mode))
         .unwrap_or(surface_caps.present_modes[0]);
-
         let config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
             format: surface_format,
             width: size.width,
             height: size.height,
-            present_mode, // Use the selected mode
+            present_mode,
             alpha_mode: surface_caps.alpha_modes[0],
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
 
-        // --- Camera ---
         let camera = Camera::new([0.0, 30.0, 0.0]);
         let camera_controller = CameraController::new(50.0, 0.2);
         let atmosphere = AtmosphereState::new();
+
         let camera_uniform = CameraUniform {
             view_proj: cgmath::Matrix4::identity().into(),
             inv_view_proj: cgmath::Matrix4::identity().into(),
             camera_pos: [0.0, 0.0, 0.0],
             time: 0.0,
             day_progress: 0.0,
-            weather: 0.0,
+            weather_offset: 0.0,
             cloud_type: 0.0,
-            padding: 0.0,
+            lightning_intensity: 0.0,
+            lightning_pos: [0.0, 0.0, 0.0],
+            _padding1: 0.0,
+            lightning_color: [1.0, 1.0, 1.0],
+            _pad_col_to_wind: 0.0,
+            wind: [0.0, 0.0],
+            rain: 0.0,
+            _pad_end: 0.0,
         };
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
@@ -346,10 +427,23 @@ impl State {
             label: Some("camera_group"),
         });
 
-        // --- Offscreen ---
+        let mut rng_seed = 12345;
+        let rain_instances: Vec<RainInstance> = (0..RAIN_PARTICLES)
+            .map(|_| {
+                let x = (random_f32(&mut rng_seed) - 0.5) * 80.0;
+                let y = (random_f32(&mut rng_seed) - 0.5) * 60.0;
+                let z = (random_f32(&mut rng_seed) - 0.5) * 80.0;
+                RainInstance { offset: [x, y, z] }
+            })
+            .collect();
+        let rain_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Rain Buffer"),
+            contents: bytemuck::cast_slice(&rain_instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+
         let offscreen_width = (size.width as f32 * RENDER_SCALE) as u32;
         let offscreen_height = (size.height as f32 * RENDER_SCALE) as u32;
-
         let texture_desc = wgpu::TextureDescriptor {
             size: wgpu::Extent3d {
                 width: offscreen_width,
@@ -396,7 +490,6 @@ impl State {
                 ],
                 label: Some("offscreen_layout"),
             });
-
         let offscreen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &offscreen_bind_group_layout,
             entries: &[
@@ -412,13 +505,11 @@ impl State {
             label: Some("offscreen_group"),
         });
 
-        // --- Pipelines ---
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
         });
 
-        // Cloud Pipeline
         let cloud_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Cloud Layout"),
@@ -454,7 +545,6 @@ impl State {
             cache: None,
         });
 
-        // Blit Pipeline
         let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Blit Layout"),
             bind_group_layouts: &[&camera_bind_group_layout, &offscreen_bind_group_layout],
@@ -489,6 +579,48 @@ impl State {
             cache: None,
         });
 
+        let rain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Rain Layout"),
+            bind_group_layouts: &[&camera_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let rain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Rain Pipeline"),
+            layout: Some(&rain_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_rain"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<RainInstance>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &[wgpu::VertexAttribute {
+                        offset: 0,
+                        shader_location: 0,
+                        format: wgpu::VertexFormat::Float32x3,
+                    }],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_rain"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
         Self {
             surface,
             device,
@@ -497,10 +629,11 @@ impl State {
             size,
             cloud_pipeline,
             blit_pipeline,
+            rain_pipeline,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
-            camera_bind_group_layout,
+            rain_buffer,
             offscreen_texture,
             offscreen_view,
             offscreen_bind_group_layout,
@@ -521,7 +654,6 @@ impl State {
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
-
             let off_w = (new_size.width as f32 * RENDER_SCALE) as u32;
             let off_h = (new_size.height as f32 * RENDER_SCALE) as u32;
             let tex_desc = wgpu::TextureDescriptor {
@@ -543,7 +675,6 @@ impl State {
             self.offscreen_view = self
                 .offscreen_texture
                 .create_view(&wgpu::TextureViewDescriptor::default());
-
             self.offscreen_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
                 layout: &self.offscreen_bind_group_layout,
                 entries: &[
@@ -563,8 +694,8 @@ impl State {
 
     fn update(&mut self, dt: f32) {
         self.camera_controller.update_camera(&mut self.camera, dt);
-        self.atmosphere.update(dt);
-
+        let cam_pos_arr: [f32; 3] = self.camera.eye.into();
+        self.atmosphere.update(dt, cam_pos_arr);
         let aspect = self.config.width as f32 / self.config.height as f32;
         let (view_proj, inv_view_proj) = self.camera.build_view_projection_matrix(aspect);
 
@@ -572,9 +703,14 @@ impl State {
         self.camera_uniform.inv_view_proj = inv_view_proj.into();
         self.camera_uniform.camera_pos = self.camera.eye.into();
         self.camera_uniform.time = self.start_time.elapsed().as_secs_f32();
-        self.camera_uniform.day_progress = self.atmosphere.current_time;
-        self.camera_uniform.weather = self.atmosphere.current_weather;
-        self.camera_uniform.cloud_type = self.atmosphere.current_cloud_type;
+        self.camera_uniform.day_progress = self.atmosphere.time;
+        self.camera_uniform.weather_offset = self.atmosphere.weather_offset;
+        self.camera_uniform.cloud_type = self.atmosphere.cloud_type;
+        self.camera_uniform.lightning_intensity = self.atmosphere.lightning_intensity;
+        self.camera_uniform.lightning_pos = self.atmosphere.lightning_pos;
+        self.camera_uniform.lightning_color = self.atmosphere.lightning_color;
+        self.camera_uniform.wind = self.atmosphere.wind;
+        self.camera_uniform.rain = self.atmosphere.rain;
 
         self.queue.write_buffer(
             &self.camera_buffer,
@@ -593,8 +729,6 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
-
-        // 1. CLOUDS (Offscreen)
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cloud Pass"),
@@ -614,9 +748,14 @@ impl State {
             render_pass.set_pipeline(&self.cloud_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
-        }
 
-        // 2. BLIT (Screen)
+            if self.atmosphere.rain > 0.01 {
+                render_pass.set_pipeline(&self.rain_pipeline);
+                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+                render_pass.set_vertex_buffer(0, self.rain_buffer.slice(..));
+                render_pass.draw(0..4, 0..RAIN_PARTICLES);
+            }
+        }
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blit Pass"),
@@ -638,7 +777,6 @@ impl State {
             render_pass.set_bind_group(1, &self.offscreen_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
         }
-
         self.queue.submit(std::iter::once(encoder.finish()));
         output.present();
         Ok(())
@@ -647,7 +785,6 @@ impl State {
 
 struct App {
     state: Option<State>,
-    // FPS Tracking
     frame_count: u32,
     last_fps_time: std::time::Instant,
 }
@@ -661,7 +798,6 @@ impl ApplicationHandler for App {
         );
         self.state = Some(pollster::block_on(State::new(window)));
     }
-
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         if let Some(state) = &mut self.state {
             match event {
@@ -678,17 +814,15 @@ impl ApplicationHandler for App {
                         Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
                         Err(_) => {}
                     }
-
-                    // FPS Calculation
                     self.frame_count += 1;
                     if now.duration_since(self.last_fps_time).as_secs() >= 1 {
                         let fps = self.frame_count;
-                        let title = format!("Minecraft Shader - FPS: {}", fps);
-                        state.window.set_title(&title);
+                        state
+                            .window
+                            .set_title(&format!("Minecraft Shader - FPS: {}", fps));
                         self.frame_count = 0;
                         self.last_fps_time = now;
                     }
-
                     state.window.request_redraw();
                 }
                 WindowEvent::KeyboardInput { event: k, .. } => {
@@ -707,19 +841,18 @@ impl ApplicationHandler for App {
             }
         }
     }
-
     fn device_event(
         &mut self,
         _el: &ActiveEventLoop,
         _id: winit::event::DeviceId,
         event: DeviceEvent,
     ) {
-        if let Some(state) = &mut self.state {
-            if let DeviceEvent::MouseMotion { delta } = event {
-                state
-                    .camera_controller
-                    .process_mouse(delta.0, delta.1, &mut state.camera);
-            }
+        if let Some(state) = &mut self.state
+            && let DeviceEvent::MouseMotion { delta } = event
+        {
+            state
+                .camera_controller
+                .process_mouse(delta.0, delta.1, &mut state.camera);
         }
     }
 }
