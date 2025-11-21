@@ -1,0 +1,758 @@
+{
+  "maricraft:air": {
+    "numeric_id": 0,
+    "geometry": "cube",
+    "textures": null,
+    "is_transparent": true,
+    "is_empty": true,
+    "needs_biome_tint": false
+  },
+  "maricraft:grass": {
+    "numeric_id": 1,
+    "geometry": "cube",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "grass_block_top",
+      "bottom": "dirt",
+      "side": "grass_block_side"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:dirt": {
+    "numeric_id": 2,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "dirt" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:stone": {
+    "numeric_id": 3,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "stone" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:sand": {
+    "numeric_id": 4,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "sand" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:wood": {
+    "numeric_id": 5,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "oak_planks" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:leaves": {
+    "numeric_id": 6,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "oak_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:cobblestone": {
+    "numeric_id": 7,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "cobblestone" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:planks": {
+    "numeric_id": 8,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "oak_planks" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:glass": {
+    "numeric_id": 9,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "glass" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:bedrock": {
+    "numeric_id": 10,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "bedrock" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:coal_ore": {
+    "numeric_id": 11,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "coal_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:iron_ore": {
+    "numeric_id": 12,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "iron_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:copper_ore": {
+    "numeric_id": 13,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "copper_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:gold_ore": {
+    "numeric_id": 14,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "gold_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:diamond_ore": {
+    "numeric_id": 15,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "diamond_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:gravel": {
+    "numeric_id": 16,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "gravel" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:andesite": {
+    "numeric_id": 17,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "andesite" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:diorite": {
+    "numeric_id": 18,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "diorite" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:deepslate": {
+    "numeric_id": 19,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "deepslate" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:amethyst": {
+    "numeric_id": 20,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "amethyst" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:budding_amethyst": {
+    "numeric_id": 21,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "budding_amethyst" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:calcite": {
+    "numeric_id": 22,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "calcite" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:lapis_ore": {
+    "numeric_id": 23,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "lapis_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:redstone_ore": {
+    "numeric_id": 24,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "redstone_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:emerald_ore": {
+    "numeric_id": 25,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "emerald_ore" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:water": {
+    "numeric_id": 26,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "water_still" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:lava": {
+    "numeric_id": 27,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "lava_still" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:granite": {
+    "numeric_id": 28,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "granite" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:tuff": {
+    "numeric_id": 29,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "tuff" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:dripstone": {
+    "numeric_id": 30,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "dripstone" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:packed_mud": {
+    "numeric_id": 31,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "packed_mud" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:mud_bricks": {
+    "numeric_id": 32,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "mud_bricks" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:end_stone": {
+    "numeric_id": 33,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "end_stone" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:prismarine": {
+    "numeric_id": 34,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "prismarine" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:blackstone": {
+    "numeric_id": 35,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "blackstone" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:nether_bricks": {
+    "numeric_id": 36,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "nether_bricks" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:purpur": {
+    "numeric_id": 37,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "purpur" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:basalt": {
+    "numeric_id": 38,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "basalt" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:snow_block": {
+    "numeric_id": 39,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "snow" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:ice": {
+    "numeric_id": 40,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "ice" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:cactus": {
+    "numeric_id": 41,
+    "geometry": "cube",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "cactus_top",
+      "bottom": "cactus_bottom",
+      "side": "cactus_side"
+    },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:oak_log": {
+    "numeric_id": 42,
+    "geometry": "cube",
+    "textures": { "type": "pillar", "end": "oak_log_top", "side": "oak_log" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:oak_leaves": {
+    "numeric_id": 43,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "oak_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:birch_log": {
+    "numeric_id": 44,
+    "geometry": "cube",
+    "textures": {
+      "type": "pillar",
+      "end": "birch_log_top",
+      "side": "birch_log"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:birch_leaves": {
+    "numeric_id": 45,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "birch_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:dark_oak_log": {
+    "numeric_id": 46,
+    "geometry": "cube",
+    "textures": {
+      "type": "pillar",
+      "end": "dark_oak_log_top",
+      "side": "dark_oak_log"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:dark_oak_leaves": {
+    "numeric_id": 47,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "dark_oak_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:acacia_log": {
+    "numeric_id": 48,
+    "geometry": "cube",
+    "textures": {
+      "type": "pillar",
+      "end": "acacia_log_top",
+      "side": "acacia_log"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:acacia_leaves": {
+    "numeric_id": 49,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "acacia_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:mycelium": {
+    "numeric_id": 50,
+    "geometry": "cube",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "mycelium_top",
+      "bottom": "dirt",
+      "side": "mycelium_side"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:red_sand": {
+    "numeric_id": 51,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "red_sand" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:terracotta": {
+    "numeric_id": 52,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:red_terracotta": {
+    "numeric_id": 53,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "red_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:orange_terracotta": {
+    "numeric_id": 54,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "orange_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:yellow_terracotta": {
+    "numeric_id": 55,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "yellow_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:brown_terracotta": {
+    "numeric_id": 56,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "brown_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:white_terracotta": {
+    "numeric_id": 57,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "white_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:light_gray_terracotta": {
+    "numeric_id": 58,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "light_gray_terracotta" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:cherry_log": {
+    "numeric_id": 59,
+    "geometry": "cube",
+    "textures": {
+      "type": "pillar",
+      "end": "cherry_log_top",
+      "side": "cherry_log"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:cherry_leaves": {
+    "numeric_id": 60,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "cherry_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:pink_petals": {
+    "numeric_id": 61,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "pink_petals" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:dandelion": {
+    "numeric_id": 62,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "dandelion" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:poppy": {
+    "numeric_id": 63,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "poppy" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:blue_orchid": {
+    "numeric_id": 64,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "blue_orchid" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:allium": {
+    "numeric_id": 65,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "allium" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:jungle_log": {
+    "numeric_id": 66,
+    "geometry": "cube",
+    "textures": {
+      "type": "pillar",
+      "end": "jungle_log_top",
+      "side": "jungle_log"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:jungle_leaves": {
+    "numeric_id": 67,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "jungle_leaves" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:vines": {
+    "numeric_id": 68,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "vines" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:mushroom_stem": {
+    "numeric_id": 69,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "mushroom_stem" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:red_mushroom_block": {
+    "numeric_id": 70,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "red_mushroom_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:brown_mushroom_block": {
+    "numeric_id": 71,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "brown_mushroom_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:packed_ice": {
+    "numeric_id": 72,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "packed_ice" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:blue_ice": {
+    "numeric_id": 73,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "blue_ice" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:sunflower": {
+    "numeric_id": 74,
+    "geometry": "cross",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "sunflower_top",
+      "bottom": "sunflower_bottom",
+      "side": "sunflower_front"
+    },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:lilac": {
+    "numeric_id": 75,
+    "geometry": "cross",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "lilac_top",
+      "bottom": "lilac_bottom",
+      "side": "lilac_top"
+    },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:rose_bush": {
+    "numeric_id": 76,
+    "geometry": "cross",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "rose_bush_top",
+      "bottom": "rose_bush_bottom",
+      "side": "rose_bush_top"
+    },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:peony": {
+    "numeric_id": 77,
+    "geometry": "cross",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "peony_top",
+      "bottom": "peony_bottom",
+      "side": "peony_top"
+    },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:lily_pad": {
+    "numeric_id": 78,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "lily_pad" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": true
+  },
+  "maricraft:podzol": {
+    "numeric_id": 79,
+    "geometry": "cube",
+    "textures": {
+      "type": "top_bottom_side",
+      "top": "podzol_top",
+      "bottom": "dirt",
+      "side": "podzol_side"
+    },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:coarse_dirt": {
+    "numeric_id": 80,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "coarse_dirt" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:moss_block": {
+    "numeric_id": 81,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "moss_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:clay": {
+    "numeric_id": 82,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "clay" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:glow_berries": {
+    "numeric_id": 83,
+    "geometry": "cross",
+    "textures": { "type": "uniform", "texture": "glow_berries" },
+    "is_transparent": true,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:tube_coral_block": {
+    "numeric_id": 84,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "tube_coral_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:brain_coral_block": {
+    "numeric_id": 85,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "brain_coral_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  },
+  "maricraft:bubble_coral_block": {
+    "numeric_id": 86,
+    "geometry": "cube",
+    "textures": { "type": "uniform", "texture": "bubble_coral_block" },
+    "is_transparent": false,
+    "is_empty": false,
+    "needs_biome_tint": false
+  }
+}

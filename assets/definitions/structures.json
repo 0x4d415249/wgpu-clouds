@@ -1,0 +1,313 @@
+{
+  "maricraft:oak_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:oak_log",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [4, 6] }, 0]
+      },
+      {
+        "op": "fill_sphere",
+        "block": "maricraft:oak_leaves",
+        "center": [0, { "get_var": "last_y" }, 0],
+        "radius": { "rand_float": [2.5, 3.5] }
+      }
+    ]
+  },
+  "maricraft:swamp_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:oak_log",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [4, 7] }, 0]
+      },
+      {
+        "op": "fill_sphere",
+        "block": "maricraft:oak_leaves",
+        "center": [0, { "get_var": "last_y" }, 0],
+        "radius": { "rand_float": [2.5, 3.5] }
+      }
+    ]
+  },
+  "maricraft:birch_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:birch_log",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [5, 7] }, 0]
+      },
+      {
+        "op": "fill_sphere",
+        "block": "maricraft:birch_leaves",
+        "center": [0, { "get_var": "last_y" }, 0],
+        "radius": { "rand_float": [2.5, 3.5] }
+      }
+    ]
+  },
+  "maricraft:dark_oak_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:dark_oak_log",
+        "pos1": [0, 0, 0],
+        "pos2": [1, { "rand_int": [6, 9] }, 1]
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:dark_oak_leaves",
+        "pos1": [-2, { "get_var": "last_y" }, -2],
+        "pos2": [3, { "get_var": "last_y" }, 3]
+      }
+    ]
+  },
+  "maricraft:acacia_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:acacia_log",
+        "pos1": [0, 0, 0],
+        "pos2": [
+          { "rand_int": [1, 2] },
+          { "rand_int": [5, 8] },
+          { "rand_int": [1, 2] }
+        ]
+      },
+      {
+        "op": "fill_sphere",
+        "block": "maricraft:acacia_leaves",
+        "center": [
+          { "get_var": "last_x" },
+          { "get_var": "last_y" },
+          { "get_var": "last_z" }
+        ],
+        "radius": { "rand_float": [2.0, 3.0] }
+      }
+    ]
+  },
+  "maricraft:cherry_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:cherry_log",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [6, 11] }, 0]
+      },
+      {
+        "op": "fill_sphere",
+        "block": "maricraft:cherry_leaves",
+        "center": [0, { "get_var": "last_y" }, 0],
+        "radius": { "rand_float": [4.0, 4.5] }
+      }
+    ]
+  },
+  "maricraft:jungle_tree": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:jungle_log",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [15, 25] }, 0]
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:jungle_leaves",
+        "pos1": [-2, { "get_var": "last_y" }, -2],
+        "pos2": [2, { "get_var": "last_y" }, 2]
+      }
+    ]
+  },
+  "maricraft:cactus": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:cactus",
+        "pos1": [0, 0, 0],
+        "pos2": [0, { "rand_int": [1, 3] }, 0]
+      }
+    ]
+  },
+  "maricraft:flower_patch_common": {
+    "steps": [
+      {
+        "op": "place_block",
+        "block": { "choice": ["maricraft:dandelion", "maricraft:poppy"] },
+        "pos": [0, 0, 0]
+      }
+    ]
+  },
+  "maricraft:sunflower": {
+    "steps": [
+      { "op": "place_block", "block": "maricraft:sunflower", "pos": [0, 0, 0] }
+    ]
+  },
+  "maricraft:flower_patch_forest": {
+    "steps": [
+      {
+        "op": "place_block",
+        "block": {
+          "choice": [
+            "maricraft:dandelion",
+            "maricraft:poppy",
+            "maricraft:blue_orchid",
+            "maricraft:allium",
+            "maricraft:lilac",
+            "maricraft:rose_bush",
+            "maricraft:peony"
+          ]
+        },
+        "pos": [0, 0, 0]
+      }
+    ]
+  },
+  "maricraft:castle": {
+    "steps": [
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_tower",
+        "pos": [-20, 0, -20]
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_tower",
+        "pos": [20, 0, -20]
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_tower_short",
+        "pos": [-20, 0, 20]
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_tower_short",
+        "pos": [20, 0, 20]
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_gate_tower",
+        "pos": [0, 0, -22]
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:stone",
+        "pos1": [-20, 0, -20],
+        "pos2": [20, 14, -19],
+        "crenellate_top": true
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:stone",
+        "pos1": [-20, 0, 20],
+        "pos2": [20, 14, 21],
+        "crenellate_top": true
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:stone",
+        "pos1": [-20, 0, -18],
+        "pos2": [-19, 14, 18],
+        "crenellate_top": true
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:stone",
+        "pos1": [20, 0, -18],
+        "pos2": [21, 14, 18],
+        "crenellate_top": true
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_keep",
+        "pos": [0, 0, 5]
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:planks",
+        "pos1": [-2, 0, -30],
+        "pos2": [2, 0, -23]
+      }
+    ]
+  },
+  "maricraft:castle_tower": {
+    "steps": [
+      {
+        "op": "fill_cylinder",
+        "block": "maricraft:stone",
+        "center": [0, 0, 0],
+        "radius": 6,
+        "height": 25,
+        "hollow": true
+      },
+      {
+        "op": "fill_cone",
+        "block": "maricraft:deepslate",
+        "base_center": [0, 25, 0],
+        "radius": 6,
+        "height": 6
+      }
+    ]
+  },
+  "maricraft:castle_tower_short": {
+    "steps": [
+      {
+        "op": "fill_cylinder",
+        "block": "maricraft:stone",
+        "center": [0, 0, 0],
+        "radius": 6,
+        "height": 20,
+        "hollow": true
+      },
+      {
+        "op": "fill_cone",
+        "block": "maricraft:deepslate",
+        "base_center": [0, 20, 0],
+        "radius": 6,
+        "height": 6
+      }
+    ]
+  },
+  "maricraft:castle_gate_tower": {
+    "steps": [
+      {
+        "op": "fill_cylinder",
+        "block": "maricraft:stone",
+        "center": [0, 0, 0],
+        "radius": 8,
+        "height": 20,
+        "hollow": true
+      },
+      {
+        "op": "fill_cone",
+        "block": "maricraft:deepslate",
+        "base_center": [0, 20, 0],
+        "radius": 8,
+        "height": 8
+      }
+    ]
+  },
+  "maricraft:castle_keep": {
+    "steps": [
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:stone",
+        "pos1": [-9, 0, -9],
+        "pos2": [9, 29, 9],
+        "hollow": true,
+        "crenellate_top": true
+      },
+      {
+        "op": "place_structure",
+        "structure_id": "maricraft:castle_tower_short",
+        "pos": [0, 30, 0]
+      },
+      {
+        "op": "fill_cuboid",
+        "block": "maricraft:planks",
+        "pos1": [0, 45, 0],
+        "pos2": [0, 60, 0]
+      }
+    ]
+  }
+}

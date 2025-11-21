@@ -1,0 +1,512 @@
+{
+  "badlands": {
+    "selector": {
+      "weirdness": [
+        0.8,
+        null
+      ],
+      "temperature": [
+        0.5,
+        null
+      ],
+      "humidity": [
+        null,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 70,
+      "amplitude": 15,
+      "top_block": "maricraft:red_sand",
+      "middle_block": "maricraft:terracotta"
+    },
+    "features": []
+  },
+  "ice_spikes": {
+    "selector": {
+      "weirdness": [
+        0.8,
+        null
+      ],
+      "temperature": [
+        null,
+        -0.5
+      ],
+      "humidity": [
+        null,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 66,
+      "amplitude": 5,
+      "top_block": "maricraft:snow_block",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": []
+  },
+  "mushroom_fields": {
+    "selector": {
+      "weirdness": [
+        0.8,
+        null
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        null,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 70,
+      "amplitude": 5,
+      "top_block": "maricraft:mycelium",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": []
+  },
+  "snowy_plains": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        null,
+        -0.5
+      ],
+      "humidity": [
+        null,
+        -0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 64,
+      "amplitude": 2,
+      "top_block": "maricraft:snow_block",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": []
+  },
+  "taiga": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        null,
+        -0.5
+      ],
+      "humidity": [
+        -0.5,
+        0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 66,
+      "amplitude": 8,
+      "top_block": "maricraft:podzol",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": []
+  },
+  "frozen_peaks": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        null,
+        -0.5
+      ],
+      "humidity": [
+        0.5,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 110,
+      "amplitude": 45,
+      "top_block": "maricraft:packed_ice",
+      "middle_block": "maricraft:stone"
+    },
+    "features": []
+  },
+  "plains": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        null,
+        -0.7
+      ]
+    },
+    "terrain": {
+      "base_height": 64,
+      "amplitude": 5,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:flower_patch_common",
+        "placement_chance": 0.005,
+        "can_place_on": [
+          "maricraft:grass"
+        ]
+      }
+    ]
+  },
+  "sunflower_plains": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        -0.7,
+        -0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 64,
+      "amplitude": 2,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:sunflower",
+        "placement_chance": 0.01,
+        "can_place_on": [
+          "maricraft:grass"
+        ]
+      }
+    ]
+  },
+  "forest": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        -0.5,
+        -0.2
+      ]
+    },
+    "terrain": {
+      "base_height": 68,
+      "amplitude": 10,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:oak_tree",
+        "placement_chance": 0.01,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  },
+  "flower_forest": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        -0.2,
+        0.0
+      ]
+    },
+    "terrain": {
+      "base_height": 68,
+      "amplitude": 10,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:flower_patch_forest",
+        "placement_chance": 0.03,
+        "can_place_on": [
+          "maricraft:grass"
+        ]
+      }
+    ]
+  },
+  "birch_forest": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        0.0,
+        0.2
+      ]
+    },
+    "terrain": {
+      "base_height": 68,
+      "amplitude": 8,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:birch_tree",
+        "placement_chance": 0.01,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  },
+  "dark_oak_forest": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        0.2,
+        0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 68,
+      "amplitude": 8,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:dark_oak_tree",
+        "placement_chance": 0.008,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  },
+  "cherry_grove": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        0.5,
+        0.8
+      ]
+    },
+    "terrain": {
+      "base_height": 80,
+      "amplitude": 15,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:cherry_tree",
+        "placement_chance": 0.02,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  },
+  "mountains": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        -0.5,
+        0.5
+      ],
+      "humidity": [
+        0.8,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 90,
+      "amplitude": 60,
+      "top_block": "maricraft:stone",
+      "middle_block": "maricraft:stone"
+    },
+    "features": []
+  },
+  "desert": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        0.5,
+        null
+      ],
+      "humidity": [
+        null,
+        -0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 64,
+      "amplitude": 3,
+      "top_block": "maricraft:sand",
+      "middle_block": "maricraft:sand"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:cactus",
+        "placement_chance": 0.005,
+        "can_place_on": [
+          "maricraft:sand"
+        ],
+        "requires_clear_sides": true
+      }
+    ]
+  },
+  "savanna": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        0.5,
+        null
+      ],
+      "humidity": [
+        -0.5,
+        0.5
+      ]
+    },
+    "terrain": {
+      "base_height": 64,
+      "amplitude": 4,
+      "top_block": "maricraft:coarse_dirt",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:acacia_tree",
+        "placement_chance": 0.005,
+        "can_place_on": [
+          "maricraft:coarse_dirt",
+          "maricraft:grass"
+        ]
+      }
+    ]
+  },
+  "jungle": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        0.5,
+        null
+      ],
+      "humidity": [
+        0.5,
+        0.8
+      ]
+    },
+    "terrain": {
+      "base_height": 70,
+      "amplitude": 15,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:jungle_tree",
+        "placement_chance": 0.02,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  },
+  "swamp": {
+    "selector": {
+      "weirdness": [
+        null,
+        0.8
+      ],
+      "temperature": [
+        0.5,
+        null
+      ],
+      "humidity": [
+        0.8,
+        null
+      ]
+    },
+    "terrain": {
+      "base_height": 62,
+      "amplitude": 2,
+      "top_block": "maricraft:grass",
+      "middle_block": "maricraft:dirt"
+    },
+    "features": [
+      {
+        "structure_id": "maricraft:swamp_tree",
+        "placement_chance": 0.01,
+        "can_place_on": [
+          "maricraft:grass",
+          "maricraft:dirt"
+        ]
+      }
+    ]
+  }
+}

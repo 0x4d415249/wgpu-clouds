@@ -1,291 +1,27 @@
 mod chunk;
-mod world;
-
-use crate::chunk::VoxelVertex;
-use crate::world::World;
+mod data;
+mod mesher;
+mod noise;
+mod texture;
+mod world_gen;
 
 use cgmath::prelude::*;
-use std::borrow::Cow;
 use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use wgpu::util::DeviceExt;
-use winit::{
-    application::ApplicationHandler,
-    event::*,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    keyboard::{KeyCode, PhysicalKey},
-    window::{CursorGrabMode, Window, WindowId},
-};
+use winit::application::ApplicationHandler;
+use winit::event::{DeviceEvent, ElementState, KeyEvent, WindowEvent};
+use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
+use winit::keyboard::{KeyCode, PhysicalKey};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
-const RENDER_SCALE: f32 = 0.5;
-const RAIN_PARTICLES: u32 = 20000;
+use crate::data::GameRegistry;
+use crate::mesher::VoxelVertex;
+use crate::texture::TextureAtlas;
+use crate::world_gen::WorldGenerator;
 
-#[rustfmt::skip]
-pub const OPENGL_TO_WGPU_MATRIX: cgmath::Matrix4<f32> = cgmath::Matrix4::new(
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 0.5, 0.0,
-    0.0, 0.0, 0.5, 1.0,
-);
-
-fn random_f32(seed: &mut u32) -> f32 {
-    *seed = (*seed).wrapping_mul(1664525).wrapping_add(1013904223);
-    (*seed as f32) / (u32::MAX as f32)
-}
-
-fn lerp(start: f32, end: f32, speed: f32, dt: f32) -> f32 {
-    start + (end - start) * (speed * dt).clamp(0.0, 1.0)
-}
-
-fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
-    let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-struct RainInstance {
-    offset: [f32; 3],
-}
-
-struct Camera {
-    eye: cgmath::Point3<f32>,
-    yaw: f32,
-    pitch: f32,
-}
-
-impl Camera {
-    fn new(pos: [f32; 3]) -> Self {
-        Self {
-            eye: cgmath::Point3::new(pos[0], pos[1], pos[2]),
-            yaw: -90.0,
-            pitch: 0.0,
-        }
-    }
-
-    fn build_view_projection_matrix(
-        &self,
-        aspect: f32,
-    ) -> (cgmath::Matrix4<f32>, cgmath::Matrix4<f32>) {
-        let proj = cgmath::perspective(cgmath::Deg(75.0), aspect, 0.1, 4000.0);
-        let (sin_pitch, cos_pitch) = cgmath::Rad::from(cgmath::Deg(self.pitch)).0.sin_cos();
-        let (sin_yaw, cos_yaw) = cgmath::Rad::from(cgmath::Deg(self.yaw)).0.sin_cos();
-        let forward =
-            cgmath::Vector3::new(cos_pitch * cos_yaw, sin_pitch, cos_pitch * sin_yaw).normalize();
-        let view = cgmath::Matrix4::look_to_rh(self.eye, forward, cgmath::Vector3::unit_y());
-        let view_proj = proj * view;
-        let inv_view_proj = (OPENGL_TO_WGPU_MATRIX * view_proj)
-            .invert()
-            .unwrap_or(cgmath::Matrix4::identity());
-        (OPENGL_TO_WGPU_MATRIX * view_proj, inv_view_proj)
-    }
-}
-
-struct AtmosphereState {
-    time: f32,
-    weather: f32,
-    cloud_type: f32,
-    lightning_intensity: f32,
-    lightning_pos: [f32; 3],
-    lightning_color: [f32; 3],
-    rain: f32,
-    wind: [f32; 2],
-    rng_seed: u32,
-    lightning_timer: f32,
-    weather_offset: f32,
-    target_weather_offset: f32,
-    sim_time: f32,
-}
-
-impl AtmosphereState {
-    fn new() -> Self {
-        let seed = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .subsec_nanos();
-        Self {
-            time: 0.25,
-            weather: 0.0,
-            cloud_type: 0.0,
-            lightning_intensity: 0.0,
-            lightning_pos: [0.0, 150.0, 0.0],
-            lightning_color: [1.0, 1.0, 1.0],
-            rain: 0.0,
-            wind: [0.2, 0.1],
-            weather_offset: 0.0,
-            target_weather_offset: 0.0,
-            sim_time: 0.0,
-            rng_seed: seed,
-            lightning_timer: 2.0,
-        }
-    }
-
-    fn update(&mut self, dt: f32, camera_pos: [f32; 3]) {
-        let day_duration = 60.0;
-        self.time += dt / day_duration;
-        if self.time > 1.0 {
-            self.time -= 1.0;
-        }
-
-        self.sim_time += dt * 0.1;
-
-        let w_noise = self.sim_time.sin()
-            + (self.sim_time * 2.3).cos() * 0.5
-            + (self.sim_time * 0.7).sin() * 0.2;
-        let auto_weather = (w_noise * 0.5 + 0.5).clamp(0.0, 1.0);
-
-        self.weather_offset = lerp(self.weather_offset, self.target_weather_offset, 1.0, dt);
-        let target_weather = (auto_weather + self.weather_offset).clamp(0.0, 1.0);
-        self.weather = lerp(self.weather, target_weather, 0.5, dt);
-
-        let t_noise = ((self.sim_time * 1.5).cos() * 0.5 + 0.5).clamp(0.0, 1.0);
-        self.cloud_type = lerp(self.cloud_type, t_noise, 0.5, dt);
-
-        let target_rain = smoothstep(0.6, 0.8, self.weather);
-        self.rain = lerp(self.rain, target_rain, 0.5, dt);
-
-        let target_wind_x = (self.sim_time * 3.0).sin();
-        let target_wind_z = (self.sim_time * 2.5).cos();
-        let storm_boost = 1.0 + self.weather * 3.0;
-        self.wind[0] = lerp(self.wind[0], target_wind_x * storm_boost, 0.1, dt);
-        self.wind[1] = lerp(self.wind[1], target_wind_z * storm_boost, 0.1, dt);
-
-        if self.weather > 0.85 {
-            self.lightning_timer -= dt;
-            if self.lightning_timer <= 0.0 {
-                self.lightning_intensity = 1.0;
-                let rx = (random_f32(&mut self.rng_seed) - 0.5) * 4000.0;
-                let rz = (random_f32(&mut self.rng_seed) - 0.5) * 4000.0;
-                let ry = 140.0 + random_f32(&mut self.rng_seed) * 30.0;
-                self.lightning_pos = [camera_pos[0] + rx, ry, camera_pos[2] + rz];
-
-                let r = 0.6 + random_f32(&mut self.rng_seed) * 0.4;
-                let g = 0.6 + random_f32(&mut self.rng_seed) * 0.4;
-                let b = 1.0;
-                self.lightning_color = [r, g, b];
-
-                self.lightning_timer = 0.2 + random_f32(&mut self.rng_seed) * 3.0;
-            }
-        } else {
-            self.lightning_intensity = 0.0;
-        }
-        self.lightning_intensity = lerp(self.lightning_intensity, 0.0, 8.0, dt);
-    }
-}
-
-struct CameraController {
-    speed: f32,
-    sensitivity: f32,
-    is_forward_pressed: bool,
-    is_backward_pressed: bool,
-    is_left_pressed: bool,
-    is_right_pressed: bool,
-    is_up_pressed: bool,
-    is_down_pressed: bool,
-    mouse_captured: bool,
-}
-
-impl CameraController {
-    fn new(speed: f32, sensitivity: f32) -> Self {
-        Self {
-            speed,
-            sensitivity,
-            is_forward_pressed: false,
-            is_backward_pressed: false,
-            is_left_pressed: false,
-            is_right_pressed: false,
-            is_up_pressed: false,
-            is_down_pressed: false,
-            mouse_captured: false,
-        }
-    }
-
-    fn process_keyboard(&mut self, key: KeyCode, state: ElementState, atmos: &mut AtmosphereState) {
-        let amount = state == ElementState::Pressed;
-        match key {
-            KeyCode::KeyW => {
-                self.is_forward_pressed = amount;
-            }
-            KeyCode::KeyS => {
-                self.is_backward_pressed = amount;
-            }
-            KeyCode::KeyA => {
-                self.is_left_pressed = amount;
-            }
-            KeyCode::KeyD => {
-                self.is_right_pressed = amount;
-            }
-            KeyCode::Space => {
-                self.is_up_pressed = amount;
-            }
-            KeyCode::ShiftLeft => {
-                self.is_down_pressed = amount;
-            }
-
-            KeyCode::ArrowUp if amount => {
-                atmos.target_weather_offset += 0.1;
-                println!("Stormier");
-            }
-            KeyCode::ArrowDown if amount => {
-                atmos.target_weather_offset -= 0.1;
-                println!("Clearer");
-            }
-
-            KeyCode::KeyE if amount => {
-                atmos.target_weather_offset = -1.0;
-                println!("Force Clear");
-            }
-            KeyCode::KeyR if amount => {
-                atmos.target_weather_offset = 0.0;
-                println!("Neutral");
-            }
-            KeyCode::KeyT if amount => {
-                atmos.target_weather_offset = 1.0;
-                println!("Force Storm");
-            }
-
-            _ => {}
-        }
-    }
-
-    fn process_mouse(&mut self, mouse_dx: f64, mouse_dy: f64, camera: &mut Camera) {
-        if self.mouse_captured {
-            camera.yaw += mouse_dx as f32 * self.sensitivity;
-            camera.pitch -= mouse_dy as f32 * self.sensitivity;
-            camera.pitch = camera.pitch.clamp(-89.0, 89.0);
-        }
-    }
-
-    fn update_camera(&mut self, camera: &mut Camera, dt: f32) {
-        let (sin_yaw, cos_yaw) = cgmath::Rad::from(cgmath::Deg(camera.yaw)).0.sin_cos();
-        let forward = cgmath::Vector3::new(cos_yaw, 0.0, sin_yaw).normalize();
-        let right = cgmath::Vector3::new(-sin_yaw, 0.0, cos_yaw).normalize();
-        let up = cgmath::Vector3::unit_y();
-        let mut velocity = cgmath::Vector3::zero();
-        if self.is_forward_pressed {
-            velocity += forward;
-        }
-        if self.is_backward_pressed {
-            velocity -= forward;
-        }
-        if self.is_right_pressed {
-            velocity += right;
-        }
-        if self.is_left_pressed {
-            velocity -= right;
-        }
-        if self.is_up_pressed {
-            velocity += up;
-        }
-        if self.is_down_pressed {
-            velocity -= up;
-        }
-        if velocity.magnitude2() > 0.0 {
-            velocity = velocity.normalize();
-        }
-        camera.eye += velocity * self.speed * dt;
-    }
-}
+const BLOCKS_JSON: &str = include_str!("../../maricraft/assets/definitions/blocks.json");
+const BIOMES_JSON: &str = include_str!("../../maricraft/assets/definitions/biomes.json");
 
 #[repr(C)]
 #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
@@ -299,12 +35,222 @@ struct CameraUniform {
     cloud_type: f32,
     lightning_intensity: f32,
     lightning_pos: [f32; 3],
-    _padding1: f32,
+    _pad1: f32,
     lightning_color: [f32; 3],
-    _padding2: f32,
+    _pad2: f32,
     wind: [f32; 2],
     rain: f32,
-    _pad_end: f32,
+    _pad3: f32,
+}
+
+struct AtmosphereState {
+    sim_time: f32,
+    day_time: f32,
+    weather_val: f32,
+    target_weather: f32,
+    rain_intensity: f32,
+    wind_vec: [f32; 2],
+    lightning_timer: f32,
+    lightning_active: f32,
+    lightning_pos: [f32; 3],
+    rng_seed: u32,
+}
+
+impl AtmosphereState {
+    fn new() -> Self {
+        let seed = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .subsec_nanos();
+        Self {
+            sim_time: 0.0,
+            day_time: 0.3,
+            weather_val: 0.0,
+            target_weather: 0.0,
+            rain_intensity: 0.0,
+            wind_vec: [0.1, 0.0],
+            lightning_timer: 5.0,
+            lightning_active: 0.0,
+            lightning_pos: [0.0, 100.0, 0.0],
+            rng_seed: seed,
+        }
+    }
+
+    fn update(&mut self, dt: f32, camera_pos: [f32; 3]) {
+        self.sim_time += dt;
+        self.day_time = (self.day_time + dt * 0.005) % 1.0;
+
+        let drift_speed = 0.1;
+        if self.weather_val < self.target_weather {
+            self.weather_val += drift_speed * dt;
+        } else if self.weather_val > self.target_weather {
+            self.weather_val -= drift_speed * dt;
+        }
+        self.weather_val = self.weather_val.clamp(0.0, 1.0);
+
+        let rain_threshold = 0.6;
+        let target_rain = if self.weather_val > rain_threshold {
+            (self.weather_val - rain_threshold) / (1.0 - rain_threshold)
+        } else {
+            0.0
+        };
+        self.rain_intensity = self.rain_intensity + (target_rain - self.rain_intensity) * dt;
+
+        self.wind_vec[0] = (self.sim_time * 0.1).sin() * 0.5 + (self.weather_val * 2.0);
+        self.wind_vec[1] = (self.sim_time * 0.07).cos() * 0.5;
+
+        if self.weather_val > 0.85 {
+            self.lightning_timer -= dt;
+            if self.lightning_timer <= 0.0 {
+                self.lightning_active = 1.0;
+                self.lightning_timer = self.rand_float(0.5, 4.0);
+                let lx = camera_pos[0] + self.rand_float(-100.0, 100.0);
+                let lz = camera_pos[2] + self.rand_float(-100.0, 100.0);
+                self.lightning_pos = [lx, 150.0, lz];
+            }
+        }
+        self.lightning_active = (self.lightning_active - dt * 4.0).max(0.0);
+    }
+
+    fn rand_float(&mut self, min: f32, max: f32) -> f32 {
+        self.rng_seed = self.rng_seed.wrapping_mul(1664525).wrapping_add(1013904223);
+        let val = (self.rng_seed as f32) / (u32::MAX as f32);
+        min + val * (max - min)
+    }
+}
+
+struct CameraController {
+    speed: f32,
+    sensitivity: f32,
+    yaw: f32,
+    pitch: f32,
+    position: cgmath::Point3<f32>,
+    is_forward_pressed: bool,
+    is_backward_pressed: bool,
+    is_left_pressed: bool,
+    is_right_pressed: bool,
+    is_up_pressed: bool,
+    is_down_pressed: bool,
+    mouse_captured: bool,
+    show_wireframe: bool,
+}
+
+impl CameraController {
+    fn new(position: [f32; 3], speed: f32, sensitivity: f32) -> Self {
+        Self {
+            speed,
+            sensitivity,
+            yaw: -90.0,
+            pitch: 0.0,
+            position: position.into(),
+            is_forward_pressed: false,
+            is_backward_pressed: false,
+            is_left_pressed: false,
+            is_right_pressed: false,
+            is_up_pressed: false,
+            is_down_pressed: false,
+            mouse_captured: false,
+            show_wireframe: false,
+        }
+    }
+
+    fn process_keyboard(
+        &mut self,
+        key: KeyCode,
+        state: ElementState,
+        atmos: &mut AtmosphereState,
+        window: &Window,
+    ) {
+        let amount = state == ElementState::Pressed;
+        match key {
+            KeyCode::KeyW => self.is_forward_pressed = amount,
+            KeyCode::KeyS => self.is_backward_pressed = amount,
+            KeyCode::KeyA => self.is_left_pressed = amount,
+            KeyCode::KeyD => self.is_right_pressed = amount,
+            KeyCode::Space => self.is_up_pressed = amount,
+            KeyCode::ShiftLeft => self.is_down_pressed = amount,
+            KeyCode::KeyM if amount => self.show_wireframe = !self.show_wireframe,
+            KeyCode::Escape if amount => {
+                self.mouse_captured = false;
+                let _ = window.set_cursor_grab(CursorGrabMode::None);
+                window.set_cursor_visible(true);
+            }
+            KeyCode::Digit1 if amount => {
+                atmos.target_weather = 0.0;
+                println!("Weather: Clear");
+            }
+            KeyCode::Digit2 if amount => {
+                atmos.target_weather = 0.7;
+                println!("Weather: Rain");
+            }
+            KeyCode::Digit3 if amount => {
+                atmos.target_weather = 1.0;
+                println!("Weather: Storm");
+            }
+            _ => {}
+        }
+    }
+
+    fn process_mouse(&mut self, dx: f64, dy: f64) {
+        if self.mouse_captured {
+            self.yaw += dx as f32 * self.sensitivity;
+            self.pitch -= dy as f32 * self.sensitivity;
+            self.pitch = self.pitch.clamp(-89.0, 89.0);
+        }
+    }
+
+    fn update(&mut self, dt: f32) {
+        if !self.mouse_captured {
+            return;
+        }
+        let (sin_yaw, cos_yaw) = self.yaw.to_radians().sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.to_radians().sin_cos();
+        let forward =
+            cgmath::Vector3::new(cos_yaw * cos_pitch, sin_pitch, sin_yaw * cos_pitch).normalize();
+        let right = forward.cross(cgmath::Vector3::unit_y()).normalize();
+        let up = cgmath::Vector3::unit_y();
+
+        let mut move_dir = cgmath::Vector3::zero();
+        if self.is_forward_pressed {
+            move_dir += forward;
+        }
+        if self.is_backward_pressed {
+            move_dir -= forward;
+        }
+        if self.is_right_pressed {
+            move_dir += right;
+        }
+        if self.is_left_pressed {
+            move_dir -= right;
+        }
+        if self.is_up_pressed {
+            move_dir += up;
+        }
+        if self.is_down_pressed {
+            move_dir -= up;
+        }
+
+        if move_dir.magnitude2() > 0.0 {
+            self.position += move_dir.normalize() * self.speed * dt;
+        }
+    }
+
+    fn get_matrices(&self, aspect: f32) -> ([[f32; 4]; 4], [[f32; 4]; 4]) {
+        let proj = cgmath::perspective(cgmath::Deg(70.0), aspect, 0.1, 2000.0);
+        let (sin_yaw, cos_yaw) = self.yaw.to_radians().sin_cos();
+        let (sin_pitch, cos_pitch) = self.pitch.to_radians().sin_cos();
+        let forward =
+            cgmath::Vector3::new(cos_yaw * cos_pitch, sin_pitch, sin_yaw * cos_pitch).normalize();
+        let view = cgmath::Matrix4::look_to_rh(self.position, forward, cgmath::Vector3::unit_y());
+
+        #[rustfmt::skip]
+        let correction = cgmath::Matrix4::new(
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5, 1.0,
+        );
+        let view_proj = correction * proj * view;
+        let inv_view_proj = view_proj.invert().unwrap_or(cgmath::Matrix4::identity());
+        (view_proj.into(), inv_view_proj.into())
+    }
 }
 
 struct State {
@@ -312,134 +258,196 @@ struct State {
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
-    size: winit::dpi::PhysicalSize<u32>,
-    cloud_pipeline: wgpu::RenderPipeline,
-    blit_pipeline: wgpu::RenderPipeline,
-    rain_pipeline: wgpu::RenderPipeline,
-    voxel_pipeline: wgpu::RenderPipeline,
-    compute_pipeline: wgpu::ComputePipeline,
-    camera_uniform: CameraUniform,
-    camera_buffer: wgpu::Buffer,
+    render_pipeline: wgpu::RenderPipeline,
+    wireframe_pipeline: wgpu::RenderPipeline,
+    skybox_pipeline: wgpu::RenderPipeline,
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    num_indices: u32,
+    texture_bind_group: wgpu::BindGroup,
     camera_bind_group: wgpu::BindGroup,
-    _camera_bind_group_layout: wgpu::BindGroupLayout,
-    _rain_buffer: wgpu::Buffer,
-    particle_bind_group: wgpu::BindGroup,
-    offscreen_texture: wgpu::Texture,
-    offscreen_view: wgpu::TextureView,
-    offscreen_bind_group_layout: wgpu::BindGroupLayout,
-    offscreen_bind_group: wgpu::BindGroup,
-    offscreen_sampler: wgpu::Sampler,
+    camera_buffer: wgpu::Buffer,
     depth_texture: wgpu::Texture,
     depth_view: wgpu::TextureView,
-    empty_bind_group: wgpu::BindGroup,
-    start_time: std::time::Instant,
-    last_frame_time: std::time::Instant,
-    camera: Camera,
+    window: Arc<Window>,
     camera_controller: CameraController,
     atmosphere: AtmosphereState,
-    world: World,
-    window: Arc<Window>,
+    last_frame: Instant,
 }
 
-impl State {
-    async fn new(window: Arc<Window>) -> Self {
-        let size = window.inner_size();
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
-            backends: wgpu::Backends::all(),
-            ..Default::default()
-        });
+struct App {
+    state: Option<State>,
+}
+
+impl ApplicationHandler for App {
+    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+        if self.state.is_some() {
+            return;
+        }
+        let window = Arc::new(
+            event_loop
+                .create_window(Window::default_attributes().with_title("WGPU Maricraft"))
+                .unwrap(),
+        );
+        let instance = wgpu::Instance::default();
         let surface = instance.create_surface(window.clone()).unwrap();
-        let adapter = instance
-            .request_adapter(&wgpu::RequestAdapterOptions {
-                power_preference: wgpu::PowerPreference::HighPerformance,
-                compatible_surface: Some(&surface),
-                force_fallback_adapter: false,
-            })
-            .await
-            .unwrap();
 
-        let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: None,
-                required_features: wgpu::Features::empty()
-                    | wgpu::Features::VERTEX_WRITABLE_STORAGE,
-                required_limits: wgpu::Limits::default(),
-                ..Default::default()
-            })
-            .await
-            .unwrap();
+        let (adapter, device, queue) = pollster::block_on(async {
+            let adapter = instance
+                .request_adapter(&wgpu::RequestAdapterOptions {
+                    power_preference: wgpu::PowerPreference::HighPerformance,
+                    compatible_surface: Some(&surface),
+                    force_fallback_adapter: false,
+                })
+                .await
+                .unwrap();
 
-        let surface_caps = surface.get_capabilities(&adapter);
-        let surface_format = surface_caps
-            .formats
-            .iter()
-            .copied()
-            .find(|f| f.is_srgb())
-            .unwrap_or(surface_caps.formats[0]);
-        let present_mode = [
-            wgpu::PresentMode::Immediate,
-            wgpu::PresentMode::Mailbox,
-            wgpu::PresentMode::Fifo,
-        ]
-        .into_iter()
-        .find(|&mode| surface_caps.present_modes.contains(&mode))
-        .unwrap_or(surface_caps.present_modes[0]);
-        let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format: surface_format,
-            width: size.width,
-            height: size.height,
-            present_mode,
-            alpha_mode: surface_caps.alpha_modes[0],
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
-        };
+            let (device, queue) = adapter
+                .request_device(&wgpu::DeviceDescriptor {
+                    label: None,
+                    // REQUIRE POLYGON_MODE_LINE for wireframe
+                    required_features: wgpu::Features::POLYGON_MODE_LINE,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::default(),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+            (adapter, device, queue)
+        });
+
+        let size = window.inner_size();
+        let width = size.width.max(1);
+        let height = size.height.max(1);
+        let config = surface.get_default_config(&adapter, width, height).unwrap();
         surface.configure(&device, &config);
 
-        let camera = Camera::new([0.0, 40.0, 0.0]);
-        let camera_controller = CameraController::new(50.0, 0.2);
-        let atmosphere = AtmosphereState::new();
+        let registry = GameRegistry::new_from_json(BLOCKS_JSON, BIOMES_JSON).unwrap();
+        let atlas = TextureAtlas::load_from_folder("assets/textures/block").unwrap();
 
-        let camera_uniform = CameraUniform {
-            view_proj: cgmath::Matrix4::identity().into(),
-            inv_view_proj: cgmath::Matrix4::identity().into(),
-            camera_pos: [0.0, 0.0, 0.0],
-            time: 0.0,
-            day_progress: 0.0,
-            weather_offset: 0.0,
-            cloud_type: 0.0,
-            lightning_intensity: 0.0,
-            lightning_pos: [0.0, 0.0, 0.0],
-            _padding1: 0.0,
-            lightning_color: [1.0, 1.0, 1.0],
-            _padding2: 0.0,
-            wind: [0.0, 0.0],
-            rain: 0.0,
-            _pad_end: 0.0,
-        };
-        let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Camera Buffer"),
-            contents: bytemuck::cast_slice(&[camera_uniform]),
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        let diffuse_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: atlas.image.width(),
+                height: atlas.image.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            label: Some("diffuse_texture"),
+            view_formats: &[],
         });
-        let camera_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[wgpu::BindGroupLayoutEntry {
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &diffuse_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &atlas.image,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(4 * atlas.image.width()),
+                rows_per_image: Some(atlas.image.height()),
+            },
+            wgpu::Extent3d {
+                width: atlas.image.width(),
+                height: atlas.image.height(),
+                depth_or_array_layers: 1,
+            },
+        );
+        let diffuse_view = diffuse_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let diffuse_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+
+        let generator = WorldGenerator::new(12345, registry.clone());
+        let chunk = generator.generate_chunk(0, 0);
+        let (vertices, indices) = mesher::generate_mesh(&chunk, &registry, &atlas);
+
+        let vertex_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Vertex Buffer"),
+            contents: bytemuck::cast_slice(&vertices),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+        let index_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Index Buffer"),
+            contents: bytemuck::cast_slice(&indices),
+            usage: wgpu::BufferUsages::INDEX,
+        });
+        let num_indices = indices.len() as u32;
+
+        let camera_controller = CameraController::new([32.0, 80.0, 32.0], 20.0, 0.1);
+        let atmosphere = AtmosphereState::new();
+        let camera_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Camera Buffer"),
+            size: std::mem::size_of::<CameraUniform>() as u64,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shader.wgsl").into()),
+        });
+
+        let texture_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX
-                        | wgpu::ShaderStages::FRAGMENT
-                        | wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
                     },
                     count: None,
-                }],
-                label: Some("camera_layout"),
-            });
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+            label: Some("texture_layout"),
+        });
+        let texture_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &texture_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&diffuse_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&diffuse_sampler),
+                },
+            ],
+            label: Some("texture_group"),
+        });
+
+        let camera_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+            label: Some("camera_layout"),
+        });
         let camera_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &camera_bind_group_layout,
+            layout: &camera_layout,
             entries: &[wgpu::BindGroupEntry {
                 binding: 0,
                 resource: camera_buffer.as_entire_binding(),
@@ -447,204 +455,177 @@ impl State {
             label: Some("camera_group"),
         });
 
-        let mut rng_seed = 12345;
-        #[repr(C)]
-        #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
-        struct ParticleInit {
-            pos: [f32; 4],
-            vel: [f32; 4],
-        }
-        let particles: Vec<ParticleInit> = (0..RAIN_PARTICLES)
-            .map(|_| {
-                let x = (random_f32(&mut rng_seed) - 0.5) * 80.0;
-                let y = (random_f32(&mut rng_seed) - 0.5) * 60.0;
-                let z = (random_f32(&mut rng_seed) - 0.5) * 80.0;
-                let scale = 0.5 + random_f32(&mut rng_seed) * 0.5;
-                let speed = -40.0 - random_f32(&mut rng_seed) * 20.0;
-                ParticleInit {
-                    pos: [x, y, z, scale],
-                    vel: [0.0, speed, 0.0, 0.0],
-                }
-            })
-            .collect();
-        let rain_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Rain Buffer"),
-            contents: bytemuck::cast_slice(&particles),
-            usage: wgpu::BufferUsages::VERTEX
-                | wgpu::BufferUsages::STORAGE
-                | wgpu::BufferUsages::COPY_DST,
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Render Pipeline Layout"),
+            bind_group_layouts: &[&camera_layout, &texture_layout],
+            push_constant_ranges: &[],
         });
 
-        let particle_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Particle Layout"),
-                entries: &[wgpu::BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                }],
-            });
-        let particle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Particle Group"),
-            layout: &particle_bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: rain_buffer.as_entire_binding(),
-            }],
-        });
-
-        let offscreen_width = (size.width as f32 * RENDER_SCALE) as u32;
-        let offscreen_height = (size.height as f32 * RENDER_SCALE) as u32;
-        let texture_desc = wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: offscreen_width,
-                height: offscreen_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: config.format,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: Some("offscreen_texture"),
-            view_formats: &[],
-        };
-        let offscreen_texture = device.create_texture(&texture_desc);
-        let offscreen_view = offscreen_texture.create_view(&wgpu::TextureViewDescriptor::default());
-        let offscreen_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
-            address_mode_u: wgpu::AddressMode::ClampToEdge,
-            address_mode_v: wgpu::AddressMode::ClampToEdge,
-            mag_filter: wgpu::FilterMode::Linear,
-            min_filter: wgpu::FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let offscreen_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 0,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Texture {
-                            multisampled: false,
-                            view_dimension: wgpu::TextureViewDimension::D2,
-                            sample_type: wgpu::TextureSampleType::Float { filterable: true },
-                        },
-                        count: None,
-                    },
-                    wgpu::BindGroupLayoutEntry {
-                        binding: 1,
-                        visibility: wgpu::ShaderStages::FRAGMENT,
-                        ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
-                        count: None,
-                    },
-                ],
-                label: Some("offscreen_layout"),
-            });
-        let offscreen_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &offscreen_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&offscreen_view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&offscreen_sampler),
-                },
-            ],
-            label: Some("offscreen_group"),
-        });
-        let empty_bind_group_layout =
-            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                label: Some("Empty Layout"),
-                entries: &[],
-            });
-        let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("Empty Group"),
-            layout: &empty_bind_group_layout,
-            entries: &[],
-        });
-
-        // Depth Texture
-        let depth_desc = wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: offscreen_width,
-                height: offscreen_height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Depth32Float,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            label: Some("Depth Texture"),
-            view_formats: &[],
-        };
-        let depth_texture = device.create_texture(&depth_desc);
-        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
-
-        let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
-            label: Some("Shader"),
-            source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
-        });
-
-        let compute_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Compute Layout"),
-                bind_group_layouts: &[
-                    &camera_bind_group_layout,
-                    &empty_bind_group_layout,
-                    &particle_bind_group_layout,
-                ],
-                push_constant_ranges: &[],
-            });
-        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
-            label: Some("Compute Pipeline"),
-            layout: Some(&compute_pipeline_layout),
-            module: &shader,
-            entry_point: Some("cs_rain"),
-            compilation_options: wgpu::PipelineCompilationOptions::default(),
-            cache: None,
-        });
-
-        let cloud_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Cloud Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-        let cloud_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Cloud Pipeline"),
-            layout: Some(&cloud_pipeline_layout),
+        // SOLID PIPELINE (Standard Culling)
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Render Pipeline"),
+            layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<VoxelVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 32,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 48,
+                            shader_location: 4,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_clouds"),
+                entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: None,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                compilation_options: Default::default(),
             }),
+            // FIXED: Revert to Back Culling now that vertices are CCW
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
+                cull_mode: Some(wgpu::Face::Back),
                 ..Default::default()
             },
             depth_stencil: Some(wgpu::DepthStencilState {
                 format: wgpu::TextureFormat::Depth32Float,
                 depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        // WIREFRAME PIPELINE (No Culling, Line Mode)
+        let wireframe_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Wireframe Pipeline"),
+            layout: Some(&pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_main"),
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<VoxelVertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Vertex,
+                    attributes: &[
+                        wgpu::VertexAttribute {
+                            offset: 0,
+                            shader_location: 0,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 12,
+                            shader_location: 1,
+                            format: wgpu::VertexFormat::Float32x3,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 24,
+                            shader_location: 2,
+                            format: wgpu::VertexFormat::Float32x2,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 32,
+                            shader_location: 3,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                        wgpu::VertexAttribute {
+                            offset: 48,
+                            shader_location: 4,
+                            format: wgpu::VertexFormat::Float32x4,
+                        },
+                    ],
+                }],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_main"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            // Wireframe settings
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                polygon_mode: wgpu::PolygonMode::Line,
+                cull_mode: None, // See through wireframe
+                ..Default::default()
+            },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: true,
+                depth_compare: wgpu::CompareFunction::Less,
+                stencil: wgpu::StencilState::default(),
+                bias: wgpu::DepthBiasState::default(),
+            }),
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
+
+        let skybox_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Skybox Layout"),
+            bind_group_layouts: &[&camera_layout, &texture_layout],
+            push_constant_ranges: &[],
+        });
+        let skybox_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Skybox Pipeline"),
+            layout: Some(&skybox_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_skybox"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_skybox"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: config.format,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: wgpu::PrimitiveState::default(),
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: wgpu::TextureFormat::Depth32Float,
+                depth_write_enabled: false,
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 stencil: wgpu::StencilState::default(),
                 bias: wgpu::DepthBiasState::default(),
@@ -654,483 +635,227 @@ impl State {
             cache: None,
         });
 
-        let rain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Rain Layout"),
-            bind_group_layouts: &[
-                &camera_bind_group_layout,
-                &empty_bind_group_layout,
-                &particle_bind_group_layout,
-            ],
-            push_constant_ranges: &[],
-        });
-        let rain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Rain Pipeline"),
-            layout: Some(&rain_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_rain"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
+        let depth_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: config.width,
+                height: config.height,
+                depth_or_array_layers: 1,
             },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_rain"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: false,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Depth32Float,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            label: Some("depth"),
+            view_formats: &[],
         });
+        let depth_view = depth_texture.create_view(&wgpu::TextureViewDescriptor::default());
 
-        // Voxel Pipeline
-        let voxel_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                label: Some("Voxel Layout"),
-                bind_group_layouts: &[&camera_bind_group_layout],
-                push_constant_ranges: &[],
-            });
-        let voxel_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Voxel Pipeline"),
-            layout: Some(&voxel_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_voxel"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<VoxelVertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Vertex,
-                    attributes: &[
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
-                            offset: 0,
-                            shader_location: 0,
-                        }, // Pos
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
-                            offset: 12,
-                            shader_location: 1,
-                        }, // Color
-                        wgpu::VertexAttribute {
-                            format: wgpu::VertexFormat::Float32x3,
-                            offset: 24,
-                            shader_location: 2,
-                        }, // Normal
-                    ],
-                }],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_voxel"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                cull_mode: None,
-                ..Default::default()
-            },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: wgpu::TextureFormat::Depth32Float,
-                depth_write_enabled: true,
-                depth_compare: wgpu::CompareFunction::Less,
-                stencil: wgpu::StencilState::default(),
-                bias: wgpu::DepthBiasState::default(),
-            }),
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let blit_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("Blit Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout, &offscreen_bind_group_layout],
-            push_constant_ranges: &[],
-        });
-        let blit_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Blit Pipeline"),
-            layout: Some(&blit_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_blit"),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
-
-        let mut world = World::new();
-        world.generate_area(&device, 6);
-
-        let mut s = Self {
+        self.state = Some(State {
             surface,
             device,
             queue,
             config,
-            size,
-            cloud_pipeline,
-            blit_pipeline,
-            rain_pipeline,
-            compute_pipeline,
-            voxel_pipeline,
-            camera_uniform,
-            camera_buffer,
+            render_pipeline,
+            wireframe_pipeline,
+            skybox_pipeline,
+            vertex_buffer,
+            index_buffer,
+            num_indices: indices.len() as u32,
+            texture_bind_group,
             camera_bind_group,
-            _camera_bind_group_layout: camera_bind_group_layout,
-            _rain_buffer: rain_buffer,
-            particle_bind_group,
-            offscreen_texture,
-            offscreen_view,
-            offscreen_bind_group_layout,
-            offscreen_bind_group,
-            offscreen_sampler,
+            camera_buffer,
             depth_texture,
             depth_view,
-            empty_bind_group,
-            start_time: std::time::Instant::now(),
-            last_frame_time: std::time::Instant::now(),
-            camera,
+            window,
             camera_controller,
             atmosphere,
-            world,
-            window,
-        };
-        s.set_capture(true);
-        s
+            last_frame: Instant::now(),
+        });
     }
 
-    fn set_capture(&mut self, captured: bool) {
-        self.camera_controller.mouse_captured = captured;
-        self.window.set_cursor_visible(!captured);
-        if captured {
-            let _ = self
-                .window
-                .set_cursor_grab(CursorGrabMode::Confined)
-                .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Locked));
-        } else {
-            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
-        }
-    }
-
-    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
-        if new_size.width > 0 && new_size.height > 0 {
-            self.size = new_size;
-            self.config.width = new_size.width;
-            self.config.height = new_size.height;
-            self.surface.configure(&self.device, &self.config);
-            let off_w = (new_size.width as f32 * RENDER_SCALE) as u32;
-            let off_h = (new_size.height as f32 * RENDER_SCALE) as u32;
-            let tex_desc = wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: off_w,
-                    height: off_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: self.config.format,
-                usage: wgpu::TextureUsages::TEXTURE_BINDING
-                    | wgpu::TextureUsages::RENDER_ATTACHMENT,
-                label: Some("offscreen_texture"),
-                view_formats: &[],
-            };
-            self.offscreen_texture = self.device.create_texture(&tex_desc);
-            self.offscreen_view = self
-                .offscreen_texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-            self.offscreen_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                layout: &self.offscreen_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: wgpu::BindingResource::TextureView(&self.offscreen_view),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::Sampler(&self.offscreen_sampler),
-                    },
-                ],
-                label: Some("offscreen_group"),
-            });
-
-            // Recreate Depth
-            let depth_desc = wgpu::TextureDescriptor {
-                size: wgpu::Extent3d {
-                    width: off_w,
-                    height: off_h,
-                    depth_or_array_layers: 1,
-                },
-                mip_level_count: 1,
-                sample_count: 1,
-                dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Depth32Float,
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                label: Some("Depth Texture"),
-                view_formats: &[],
-            };
-            self.depth_texture = self.device.create_texture(&depth_desc);
-            self.depth_view = self
-                .depth_texture
-                .create_view(&wgpu::TextureViewDescriptor::default());
-        }
-    }
-
-    fn update(&mut self, dt: f32) {
-        self.camera_controller.update_camera(&mut self.camera, dt);
-        let cam_pos_arr: [f32; 3] = self.camera.eye.into();
-        self.atmosphere.update(dt, cam_pos_arr);
-        let aspect = self.config.width as f32 / self.config.height as f32;
-        let (view_proj, inv_view_proj) = self.camera.build_view_projection_matrix(aspect);
-        self.camera_uniform.view_proj = view_proj.into();
-        self.camera_uniform.inv_view_proj = inv_view_proj.into();
-        self.camera_uniform.camera_pos = self.camera.eye.into();
-        self.camera_uniform.time = self.start_time.elapsed().as_secs_f32();
-        self.camera_uniform.day_progress = self.atmosphere.time;
-        self.camera_uniform.weather_offset = self.atmosphere.weather_offset;
-        self.camera_uniform.cloud_type = self.atmosphere.cloud_type;
-        self.camera_uniform.lightning_intensity = self.atmosphere.lightning_intensity;
-        self.camera_uniform.lightning_pos = self.atmosphere.lightning_pos;
-        self.camera_uniform.lightning_color = self.atmosphere.lightning_color;
-        self.camera_uniform.wind = self.atmosphere.wind;
-        self.camera_uniform.rain = self.atmosphere.rain;
-        self.queue.write_buffer(
-            &self.camera_buffer,
-            0,
-            bytemuck::cast_slice(&[self.camera_uniform]),
-        );
-    }
-
-    fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
-        let output = self.surface.get_current_texture()?;
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut encoder = self
-            .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
-            });
-
-        // 1. Compute
-        if self.atmosphere.rain > 0.01 {
-            let mut c_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("Rain Compute"),
-                timestamp_writes: None,
-            });
-            c_pass.set_pipeline(&self.compute_pipeline);
-            c_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            c_pass.set_bind_group(1, &self.empty_bind_group, &[]);
-            c_pass.set_bind_group(2, &self.particle_bind_group, &[]);
-            let workgroups = (RAIN_PARTICLES + 63) / 64;
-            c_pass.dispatch_workgroups(workgroups, 1, 1);
+    fn window_event(
+        &mut self,
+        event_loop: &ActiveEventLoop,
+        window_id: WindowId,
+        event: WindowEvent,
+    ) {
+        let Some(state) = &mut self.state else { return };
+        if window_id != state.window.id() {
+            return;
         }
 
-        // 2. Render Pass (Offscreen + Depth)
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Offscreen Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &self.offscreen_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &self.depth_view,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(1.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-
-            // A. Skybox
-            render_pass.set_pipeline(&self.cloud_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
-
-            // B. Voxels
-            render_pass.set_pipeline(&self.voxel_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            for chunk in self.world.chunks.values() {
-                if let (Some(vb), Some(ib)) = (&chunk.vertex_buffer, &chunk.index_buffer) {
-                    render_pass.set_vertex_buffer(0, vb.slice(..));
-                    render_pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-                    render_pass.draw_indexed(0..chunk.index_count, 0, 0..1);
+        match event {
+            WindowEvent::CloseRequested => event_loop.exit(),
+            WindowEvent::Resized(physical_size) => {
+                if physical_size.width > 0 && physical_size.height > 0 {
+                    state.config.width = physical_size.width;
+                    state.config.height = physical_size.height;
+                    state.surface.configure(&state.device, &state.config);
+                    state.depth_texture = state.device.create_texture(&wgpu::TextureDescriptor {
+                        size: wgpu::Extent3d {
+                            width: physical_size.width,
+                            height: physical_size.height,
+                            depth_or_array_layers: 1,
+                        },
+                        mip_level_count: 1,
+                        sample_count: 1,
+                        dimension: wgpu::TextureDimension::D2,
+                        format: wgpu::TextureFormat::Depth32Float,
+                        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                        label: Some("depth"),
+                        view_formats: &[],
+                    });
+                    state.depth_view = state
+                        .depth_texture
+                        .create_view(&wgpu::TextureViewDescriptor::default());
                 }
             }
-
-            // C. Rain
-            if self.atmosphere.rain > 0.01 {
-                render_pass.set_pipeline(&self.rain_pipeline);
-                render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                render_pass.set_bind_group(1, &self.empty_bind_group, &[]);
-                render_pass.set_bind_group(2, &self.particle_bind_group, &[]);
-                render_pass.draw(0..4, 0..RAIN_PARTICLES);
-            }
-        }
-
-        // 3. Blit (Upscale)
-        {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Blit Pass"),
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
+            WindowEvent::KeyboardInput {
+                event:
+                    KeyEvent {
+                        physical_key: PhysicalKey::Code(code),
+                        state: k_state,
+                        ..
                     },
-                    depth_slice: None,
-                })],
-                depth_stencil_attachment: None,
-                timestamp_writes: None,
-                occlusion_query_set: None,
-            });
-            render_pass.set_pipeline(&self.blit_pipeline);
-            render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-            render_pass.set_bind_group(1, &self.offscreen_bind_group, &[]);
-            render_pass.draw(0..3, 0..1);
-        }
-        self.queue.submit(std::iter::once(encoder.finish()));
-        output.present();
-        Ok(())
-    }
-}
-
-// ... App & Main unchanged ...
-struct App {
-    state: Option<State>,
-    frame_count: u32,
-    last_fps_time: std::time::Instant,
-}
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(Window::default_attributes().with_title("WGPU Voxel Engine"))
-                .unwrap(),
-        );
-        self.state = Some(pollster::block_on(State::new(window)));
-    }
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
-        if let Some(state) = &mut self.state {
-            match event {
-                WindowEvent::CloseRequested => event_loop.exit(),
-                WindowEvent::Resized(size) => state.resize(size),
-                WindowEvent::RedrawRequested => {
-                    let now = std::time::Instant::now();
-                    let dt = (now - state.last_frame_time).as_secs_f32();
-                    state.last_frame_time = now;
-                    state.update(dt);
-                    match state.render() {
-                        Ok(_) => {}
-                        Err(wgpu::SurfaceError::Lost) => state.resize(state.size),
-                        Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                        Err(_) => {}
-                    }
-                    self.frame_count += 1;
-                    if now.duration_since(self.last_fps_time).as_secs() >= 1 {
-                        state
-                            .window
-                            .set_title(&format!("Minecraft Shader - FPS: {}", self.frame_count));
-                        self.frame_count = 0;
-                        self.last_fps_time = now;
-                    }
-                    state.window.request_redraw();
-                }
-                WindowEvent::KeyboardInput { event: k, .. } => {
-                    if k.state == ElementState::Pressed {
-                        if let PhysicalKey::Code(KeyCode::Escape) = k.physical_key {
-                            state.set_capture(false);
-                        } else if let PhysicalKey::Code(code) = k.physical_key {
-                            state.camera_controller.process_keyboard(
-                                code,
-                                k.state,
-                                &mut state.atmosphere,
-                            );
-                        }
-                    }
-                }
-                WindowEvent::MouseInput {
-                    state: m_state,
-                    button,
-                    ..
-                } => {
-                    if m_state == ElementState::Pressed && button == MouseButton::Left {
-                        state.set_capture(true);
-                    }
-                }
-                _ => {}
+                ..
+            } => {
+                state.camera_controller.process_keyboard(
+                    code,
+                    k_state,
+                    &mut state.atmosphere,
+                    &state.window,
+                );
             }
+            WindowEvent::MouseInput {
+                state: m_state,
+                button,
+                ..
+            } => {
+                if m_state == ElementState::Pressed && button == winit::event::MouseButton::Left {
+                    state.camera_controller.mouse_captured = true;
+                    let _ = state
+                        .window
+                        .set_cursor_grab(CursorGrabMode::Confined)
+                        .or_else(|_| state.window.set_cursor_grab(CursorGrabMode::Locked));
+                    state.window.set_cursor_visible(false);
+                }
+            }
+            WindowEvent::RedrawRequested => {
+                let now = Instant::now();
+                let dt = (now - state.last_frame).as_secs_f32();
+                state.last_frame = now;
+                state.camera_controller.update(dt);
+                let cam_pos: [f32; 3] = state.camera_controller.position.into();
+                state.atmosphere.update(dt, cam_pos);
+
+                let aspect = state.config.width as f32 / state.config.height as f32;
+                let (view_proj, inv_view_proj) = state.camera_controller.get_matrices(aspect);
+                let uniform = CameraUniform {
+                    view_proj,
+                    inv_view_proj,
+                    camera_pos: cam_pos,
+                    time: state.atmosphere.sim_time,
+                    day_progress: state.atmosphere.day_time,
+                    weather_offset: state.atmosphere.weather_val,
+                    cloud_type: state.atmosphere.weather_val,
+                    lightning_intensity: state.atmosphere.lightning_active,
+                    lightning_pos: state.atmosphere.lightning_pos,
+                    lightning_color: [0.9, 0.9, 1.0],
+                    wind: state.atmosphere.wind_vec,
+                    rain: state.atmosphere.rain_intensity,
+                    _pad1: 0.0,
+                    _pad2: 0.0,
+                    _pad3: 0.0,
+                };
+                state
+                    .queue
+                    .write_buffer(&state.camera_buffer, 0, bytemuck::cast_slice(&[uniform]));
+
+                let Ok(frame) = state.surface.get_current_texture() else {
+                    return;
+                };
+                let view = frame
+                    .texture
+                    .create_view(&wgpu::TextureViewDescriptor::default());
+                let mut encoder = state
+                    .device
+                    .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+                {
+                    let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: None,
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                                store: wgpu::StoreOp::Store,
+                            },
+                            depth_slice: None,
+                        })],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: &state.depth_view,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(1.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    });
+
+                    // A. Skybox
+                    rpass.set_pipeline(&state.skybox_pipeline);
+                    rpass.set_bind_group(0, &state.camera_bind_group, &[]);
+                    rpass.set_bind_group(1, &state.texture_bind_group, &[]);
+                    rpass.draw(0..3, 0..1);
+
+                    // B. Voxels (Filled or Wireframe)
+                    if state.num_indices > 0 {
+                        let pipeline = if state.camera_controller.show_wireframe {
+                            &state.wireframe_pipeline
+                        } else {
+                            &state.render_pipeline
+                        };
+                        rpass.set_pipeline(pipeline);
+                        rpass.set_bind_group(0, &state.camera_bind_group, &[]);
+                        rpass.set_bind_group(1, &state.texture_bind_group, &[]);
+                        rpass.set_vertex_buffer(0, state.vertex_buffer.slice(..));
+                        rpass.set_index_buffer(
+                            state.index_buffer.slice(..),
+                            wgpu::IndexFormat::Uint32,
+                        );
+                        rpass.draw_indexed(0..state.num_indices, 0, 0..1);
+                    }
+                }
+                state.queue.submit(Some(encoder.finish()));
+                frame.present();
+                state.window.request_redraw();
+            }
+            _ => {}
         }
     }
+
     fn device_event(
         &mut self,
-        _el: &ActiveEventLoop,
-        _id: winit::event::DeviceId,
+        _event_loop: &ActiveEventLoop,
+        _device_id: winit::event::DeviceId,
         event: DeviceEvent,
     ) {
-        if let Some(state) = &mut self.state {
-            if let DeviceEvent::MouseMotion { delta } = event {
-                state
-                    .camera_controller
-                    .process_mouse(delta.0, delta.1, &mut state.camera);
-            }
+        if let Some(state) = &mut self.state
+            && let DeviceEvent::MouseMotion { delta } = event
+        {
+            state.camera_controller.process_mouse(delta.0, delta.1);
         }
     }
 }
+
 fn main() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = App {
-        state: None,
-        frame_count: 0,
-        last_fps_time: std::time::Instant::now(),
-    };
+    let mut app = App { state: None };
     let _ = event_loop.run_app(&mut app);
 }
