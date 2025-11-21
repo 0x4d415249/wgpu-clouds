@@ -7,7 +7,7 @@ use winit::application::ApplicationHandler;
 use winit::event::*;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 const RENDER_SCALE: f32 = 0.5;
 const RAIN_PARTICLES: u32 = 20000;
@@ -21,7 +21,6 @@ fn lerp(start: f32, end: f32, speed: f32, dt: f32) -> f32 {
     start + (end - start) * (speed * dt).clamp(0.0, 1.0)
 }
 
-// FIX: Added smoothstep
 fn smoothstep(edge0: f32, edge1: f32, x: f32) -> f32 {
     let t = ((x - edge0) / (edge1 - edge0)).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
@@ -73,14 +72,15 @@ struct AtmosphereState {
     lightning_color: [f32; 3],
     rain: f32,
     wind: [f32; 2],
-    target_time: f32,
-    target_weather: f32,
-    target_cloud_type: f32,
-    rng_seed: u32,
-    lightning_timer: f32,
+
+    // Simulation vars
+    target_time: f32, // Still used for time interpolation
     weather_offset: f32,
     target_weather_offset: f32,
     sim_time: f32,
+
+    rng_seed: u32,
+    lightning_timer: f32,
 }
 
 impl AtmosphereState {
@@ -99,32 +99,35 @@ impl AtmosphereState {
             rain: 0.0,
             wind: [0.2, 0.1],
             target_time: 0.25,
-            target_weather: 0.0,
-            target_cloud_type: 0.0,
-            rng_seed: seed,
-            lightning_timer: 2.0,
             weather_offset: 0.0,
             target_weather_offset: 0.0,
             sim_time: 0.0,
+            rng_seed: seed,
+            lightning_timer: 2.0,
         }
     }
 
     fn update(&mut self, dt: f32, camera_pos: [f32; 3]) {
+        // Day Cycle
         let day_duration = 60.0;
         self.time += dt / day_duration;
         if self.time > 1.0 {
             self.time -= 1.0;
         }
 
+        // Sync target time to avoid jump if we switch modes manually
+        self.target_time = self.time;
+
+        // Weather Sim
         self.sim_time += dt * 0.1;
 
-        // Auto Weather Noise
         let w_noise = self.sim_time.sin()
             + (self.sim_time * 2.3).cos() * 0.5
             + (self.sim_time * 0.7).sin() * 0.2;
         let auto_weather = (w_noise * 0.5 + 0.5).clamp(0.0, 1.0);
 
         self.weather_offset = lerp(self.weather_offset, self.target_weather_offset, 1.0, dt);
+
         let target_weather = (auto_weather + self.weather_offset).clamp(0.0, 1.0);
         self.weather = lerp(self.weather, target_weather, 0.5, dt);
 
@@ -141,6 +144,7 @@ impl AtmosphereState {
         self.wind[0] = lerp(self.wind[0], target_wind_x * storm_boost, 0.1, dt);
         self.wind[1] = lerp(self.wind[1], target_wind_z * storm_boost, 0.1, dt);
 
+        // Lightning
         if self.weather > 0.85 {
             self.lightning_timer -= dt;
             if self.lightning_timer <= 0.0 {
@@ -173,6 +177,7 @@ struct CameraController {
     is_right_pressed: bool,
     is_up_pressed: bool,
     is_down_pressed: bool,
+    mouse_captured: bool,
 }
 
 impl CameraController {
@@ -186,6 +191,7 @@ impl CameraController {
             is_right_pressed: false,
             is_up_pressed: false,
             is_down_pressed: false,
+            mouse_captured: false,
         }
     }
 
@@ -238,9 +244,11 @@ impl CameraController {
     }
 
     fn process_mouse(&mut self, mouse_dx: f64, mouse_dy: f64, camera: &mut Camera) {
-        camera.yaw += mouse_dx as f32 * self.sensitivity;
-        camera.pitch -= mouse_dy as f32 * self.sensitivity;
-        camera.pitch = camera.pitch.clamp(-89.0, 89.0);
+        if self.mouse_captured {
+            camera.yaw += mouse_dx as f32 * self.sensitivity;
+            camera.pitch -= mouse_dy as f32 * self.sensitivity;
+            camera.pitch = camera.pitch.clamp(-89.0, 89.0);
+        }
     }
 
     fn update_camera(&mut self, camera: &mut Camera, dt: f32) {
@@ -282,16 +290,13 @@ struct CameraUniform {
     camera_pos: [f32; 3],
     time: f32,
     day_progress: f32,
-    weather_offset: f32, // Named correctly
+    weather_offset: f32,
     cloud_type: f32,
     lightning_intensity: f32,
     lightning_pos: [f32; 3],
     _padding1: f32,
     lightning_color: [f32; 3],
-    // Pad 4 bytes here because `wind` (vec2) needs 8-byte alignment and `color` ended at offset that leaves 4 bytes gap
-    // lightning_color = 12 bytes. offset 176 -> 188.
-    // 188 is not 8-byte aligned. wind starts at 192.
-    _pad_col_to_wind: f32,
+    _padding2: f32,
     wind: [f32; 2],
     rain: f32,
     _pad_end: f32,
@@ -306,16 +311,19 @@ struct State {
     cloud_pipeline: wgpu::RenderPipeline,
     blit_pipeline: wgpu::RenderPipeline,
     rain_pipeline: wgpu::RenderPipeline,
+    compute_pipeline: wgpu::ComputePipeline,
     camera_uniform: CameraUniform,
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
-    // Removed unused layout field
-    rain_buffer: wgpu::Buffer,
+    _camera_bind_group_layout: wgpu::BindGroupLayout,
+    _rain_buffer: wgpu::Buffer,
+    particle_bind_group: wgpu::BindGroup,
     offscreen_texture: wgpu::Texture,
     offscreen_view: wgpu::TextureView,
     offscreen_bind_group_layout: wgpu::BindGroupLayout,
     offscreen_bind_group: wgpu::BindGroup,
     offscreen_sampler: wgpu::Sampler,
+    empty_bind_group: wgpu::BindGroup, // NEW: Placeholder for Compute Slot 1
     start_time: std::time::Instant,
     last_frame_time: std::time::Instant,
     camera: Camera,
@@ -344,7 +352,8 @@ impl State {
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::empty(),
+                required_features: wgpu::Features::empty()
+                    | wgpu::Features::VERTEX_WRITABLE_STORAGE,
                 required_limits: wgpu::Limits::default(),
                 ..Default::default()
             })
@@ -394,7 +403,7 @@ impl State {
             lightning_pos: [0.0, 0.0, 0.0],
             _padding1: 0.0,
             lightning_color: [1.0, 1.0, 1.0],
-            _pad_col_to_wind: 0.0,
+            _padding2: 0.0,
             wind: [0.0, 0.0],
             rain: 0.0,
             _pad_end: 0.0,
@@ -408,7 +417,9 @@ impl State {
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[wgpu::BindGroupLayoutEntry {
                     binding: 0,
-                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    visibility: wgpu::ShaderStages::VERTEX
+                        | wgpu::ShaderStages::FRAGMENT
+                        | wgpu::ShaderStages::COMPUTE,
                     ty: wgpu::BindingType::Buffer {
                         ty: wgpu::BufferBindingType::Uniform,
                         has_dynamic_offset: false,
@@ -428,18 +439,66 @@ impl State {
         });
 
         let mut rng_seed = 12345;
-        let rain_instances: Vec<RainInstance> = (0..RAIN_PARTICLES)
+        #[repr(C)]
+        #[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+        struct ParticleInit {
+            pos: [f32; 4],
+            vel: [f32; 4],
+        }
+        let particles: Vec<ParticleInit> = (0..RAIN_PARTICLES)
             .map(|_| {
                 let x = (random_f32(&mut rng_seed) - 0.5) * 80.0;
                 let y = (random_f32(&mut rng_seed) - 0.5) * 60.0;
                 let z = (random_f32(&mut rng_seed) - 0.5) * 80.0;
-                RainInstance { offset: [x, y, z] }
+                let scale = 0.5 + random_f32(&mut rng_seed) * 0.5;
+                let speed = -40.0 - random_f32(&mut rng_seed) * 20.0;
+                ParticleInit {
+                    pos: [x, y, z, scale],
+                    vel: [0.0, speed, 0.0, 0.0],
+                }
             })
             .collect();
         let rain_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Rain Buffer"),
-            contents: bytemuck::cast_slice(&rain_instances),
-            usage: wgpu::BufferUsages::VERTEX,
+            contents: bytemuck::cast_slice(&particles),
+            usage: wgpu::BufferUsages::VERTEX
+                | wgpu::BufferUsages::STORAGE
+                | wgpu::BufferUsages::COPY_DST,
+        });
+
+        let particle_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Particle Layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE | wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
+        let particle_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Particle Group"),
+            layout: &particle_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: rain_buffer.as_entire_binding(),
+            }],
+        });
+
+        // NEW: Empty Bind Group for Compute Slot 1 (to skip texture)
+        let empty_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Empty Layout"),
+                entries: &[],
+            });
+        let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Empty Group"),
+            layout: &empty_bind_group_layout,
+            entries: &[],
         });
 
         let offscreen_width = (size.width as f32 * RENDER_SCALE) as u32;
@@ -508,6 +567,26 @@ impl State {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Shader"),
             source: wgpu::ShaderSource::Wgsl(Cow::Borrowed(include_str!("shader.wgsl"))),
+        });
+
+        // Compute Pipeline: Uses Empty Layout for Group 1
+        let compute_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("Compute Layout"),
+                bind_group_layouts: &[
+                    &camera_bind_group_layout,
+                    &empty_bind_group_layout,
+                    &particle_bind_group_layout,
+                ],
+                push_constant_ranges: &[],
+            });
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Compute Pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &shader,
+            entry_point: Some("cs_rain"),
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+            cache: None,
         });
 
         let cloud_pipeline_layout =
@@ -579,26 +658,44 @@ impl State {
             cache: None,
         });
 
+        // Rain Pipeline: Uses Camera, Offscreen (unused in vs_rain but kept for index consistency if reused?), Particles
+        // vs_rain does NOT access texture.
+        // However, we must match shader @group definitions.
+        // Shader: Group 0 Camera, Group 1 Texture, Group 2 Particles.
+        // vs_rain uses Camera(0) and Particles(2). It ignores Texture(1).
+        // So we can bind the texture OR the empty group here too?
+        // Actually, let's bind the REAL texture layout here because fs_rain might want to sample depth or something later.
+        // But wait, `fs_rain` outputs color.
+        // In WGSL for `vs_rain`, `t_diffuse` is defined in scope.
+        // So we MUST provide a layout for Group 1.
+        // Since we are rendering INTO `offscreen_view` in the same pass, we CANNOT bind `offscreen_view` as Group 1 (Read-Write conflict).
+        // SOLUTION: Use `empty_bind_group_layout` for Rain Pipeline as well, effectively unbinding the texture from the rain pass.
+        // This requires `shader.wgsl` to NOT define Group 1 as texture if it's not used in rain?
+        // No, WGSL is one file.
+        // If `vs_rain` and `fs_rain` do NOT reference `t_diffuse`, WGPU reflection *might* allow it to be missing.
+        // But to be safe, let's use `empty_bind_group` and in WGSL we won't touch `t_diffuse` in rain functions.
+
+        // Wait, in WGSL `@group(1) ... t_diffuse`. If we use empty layout, WGPU validation will fail if shader declares it.
+        // Actually, RenderPipeline only cares about resources USED by the entry points.
+        // `vs_rain` and `fs_rain` DO NOT use `t_diffuse`.
+        // So we can use `&[&camera_layout, &empty_layout, &particle_layout]`.
         let rain_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Rain Layout"),
-            bind_group_layouts: &[&camera_bind_group_layout],
+            bind_group_layouts: &[
+                &camera_bind_group_layout,
+                &empty_bind_group_layout,
+                &particle_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
+
         let rain_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Rain Pipeline"),
             layout: Some(&rain_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: &shader,
                 entry_point: Some("vs_rain"),
-                buffers: &[wgpu::VertexBufferLayout {
-                    array_stride: std::mem::size_of::<RainInstance>() as wgpu::BufferAddress,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &[wgpu::VertexAttribute {
-                        offset: 0,
-                        shader_location: 0,
-                        format: wgpu::VertexFormat::Float32x3,
-                    }],
-                }],
+                buffers: &[],
                 compilation_options: wgpu::PipelineCompilationOptions::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -621,7 +718,7 @@ impl State {
             cache: None,
         });
 
-        Self {
+        let mut s = Self {
             surface,
             device,
             queue,
@@ -630,21 +727,40 @@ impl State {
             cloud_pipeline,
             blit_pipeline,
             rain_pipeline,
+            compute_pipeline,
             camera_uniform,
             camera_buffer,
             camera_bind_group,
-            rain_buffer,
+            _camera_bind_group_layout: camera_bind_group_layout,
+            _rain_buffer: rain_buffer,
+            particle_bind_group,
             offscreen_texture,
             offscreen_view,
             offscreen_bind_group_layout,
             offscreen_bind_group,
             offscreen_sampler,
+            empty_bind_group, // Stored
             start_time: std::time::Instant::now(),
             last_frame_time: std::time::Instant::now(),
             camera,
             camera_controller,
             atmosphere,
             window,
+        };
+        s.set_capture(true);
+        s
+    }
+
+    fn set_capture(&mut self, captured: bool) {
+        self.camera_controller.mouse_captured = captured;
+        self.window.set_cursor_visible(!captured);
+        if captured {
+            let _ = self
+                .window
+                .set_cursor_grab(CursorGrabMode::Confined)
+                .or_else(|_| self.window.set_cursor_grab(CursorGrabMode::Locked));
+        } else {
+            let _ = self.window.set_cursor_grab(CursorGrabMode::None);
         }
     }
 
@@ -698,7 +814,6 @@ impl State {
         self.atmosphere.update(dt, cam_pos_arr);
         let aspect = self.config.width as f32 / self.config.height as f32;
         let (view_proj, inv_view_proj) = self.camera.build_view_projection_matrix(aspect);
-
         self.camera_uniform.view_proj = view_proj.into();
         self.camera_uniform.inv_view_proj = inv_view_proj.into();
         self.camera_uniform.camera_pos = self.camera.eye.into();
@@ -711,7 +826,6 @@ impl State {
         self.camera_uniform.lightning_color = self.atmosphere.lightning_color;
         self.camera_uniform.wind = self.atmosphere.wind;
         self.camera_uniform.rain = self.atmosphere.rain;
-
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -729,6 +843,23 @@ impl State {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("Render Encoder"),
             });
+
+        // 1. Compute
+        if self.atmosphere.rain > 0.01 {
+            let mut c_pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("Rain Compute"),
+                timestamp_writes: None,
+            });
+            c_pass.set_pipeline(&self.compute_pipeline);
+            c_pass.set_bind_group(0, &self.camera_bind_group, &[]);
+            // BIND EMPTY GROUP TO SLOT 1
+            c_pass.set_bind_group(1, &self.empty_bind_group, &[]);
+            c_pass.set_bind_group(2, &self.particle_bind_group, &[]);
+            let workgroups = RAIN_PARTICLES.div_ceil(64);
+            c_pass.dispatch_workgroups(workgroups, 1, 1);
+        }
+
+        // 2. Cloud + Rain (Offscreen)
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Cloud Pass"),
@@ -745,17 +876,24 @@ impl State {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
+
+            // Clouds
             render_pass.set_pipeline(&self.cloud_pipeline);
             render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
             render_pass.draw(0..3, 0..1);
 
+            // Rain
             if self.atmosphere.rain > 0.01 {
                 render_pass.set_pipeline(&self.rain_pipeline);
                 render_pass.set_bind_group(0, &self.camera_bind_group, &[]);
-                render_pass.set_vertex_buffer(0, self.rain_buffer.slice(..));
+                // Bind EMPTY group 1 (Texture unused in VS/FS rain)
+                render_pass.set_bind_group(1, &self.empty_bind_group, &[]);
+                render_pass.set_bind_group(2, &self.particle_bind_group, &[]);
                 render_pass.draw(0..4, 0..RAIN_PARTICLES);
             }
         }
+
+        // 3. Blit
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Blit Pass"),
@@ -783,12 +921,12 @@ impl State {
     }
 }
 
+// ... App & Main ...
 struct App {
     state: Option<State>,
     frame_count: u32,
     last_fps_time: std::time::Instant,
 }
-
 impl ApplicationHandler for App {
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {
         let window = Arc::new(
@@ -816,25 +954,34 @@ impl ApplicationHandler for App {
                     }
                     self.frame_count += 1;
                     if now.duration_since(self.last_fps_time).as_secs() >= 1 {
-                        let fps = self.frame_count;
                         state
                             .window
-                            .set_title(&format!("Minecraft Shader - FPS: {}", fps));
+                            .set_title(&format!("Minecraft Shader - FPS: {}", self.frame_count));
                         self.frame_count = 0;
                         self.last_fps_time = now;
                     }
                     state.window.request_redraw();
                 }
                 WindowEvent::KeyboardInput { event: k, .. } => {
-                    if let PhysicalKey::Code(KeyCode::Escape) = k.physical_key {
-                        event_loop.exit();
+                    if k.state == ElementState::Pressed {
+                        if let PhysicalKey::Code(KeyCode::Escape) = k.physical_key {
+                            state.set_capture(false);
+                        } else if let PhysicalKey::Code(code) = k.physical_key {
+                            state.camera_controller.process_keyboard(
+                                code,
+                                k.state,
+                                &mut state.atmosphere,
+                            );
+                        }
                     }
-                    if let PhysicalKey::Code(code) = k.physical_key {
-                        state.camera_controller.process_keyboard(
-                            code,
-                            k.state,
-                            &mut state.atmosphere,
-                        );
+                }
+                WindowEvent::MouseInput {
+                    state: m_state,
+                    button,
+                    ..
+                } => {
+                    if m_state == ElementState::Pressed && button == MouseButton::Left {
+                        state.set_capture(true);
                     }
                 }
                 _ => {}
@@ -856,7 +1003,6 @@ impl ApplicationHandler for App {
         }
     }
 }
-
 fn main() {
     env_logger::init();
     let event_loop = EventLoop::new().unwrap();
