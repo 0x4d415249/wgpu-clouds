@@ -18,14 +18,14 @@ struct CameraUniform {
 @group(1) @binding(0) var t_diffuse: texture_2d<f32>;
 @group(1) @binding(1) var s_diffuse: sampler;
 
-// --- PARTICLE STORAGE (Restored) ---
+// --- PARTICLE STORAGE ---
 struct Particle {
-    pos: vec4<f32>, // xyz = position, w = scale
-    vel: vec4<f32>, // xyz = velocity
+    pos: vec4<f32>,
+    vel: vec4<f32>,
 }
 @group(2) @binding(0) var<storage, read_write> particles: array<Particle>;
 
-// --- VERTEX OUTPUTS ---
+// --- OUTPUTS ---
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -35,6 +35,20 @@ struct RainVertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
     @location(1) alpha: f32,
+    @location(2) world_pos: vec3<f32>,
+}
+
+struct VoxelVertexInput {
+    @location(0) position: vec3<f32>,
+    @location(1) color: vec3<f32>,
+    @location(2) normal: vec3<f32>,
+}
+
+struct VoxelVertexOutput {
+    @builtin(position) clip_position: vec4<f32>,
+    @location(0) color: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) world_pos: vec3<f32>,
 }
 
 // --- UTILS ---
@@ -62,12 +76,21 @@ fn noise2d(p: vec2<f32>) -> f32 {
     return noise(vec3<f32>(p.x, 0.0, p.y));
 }
 
+fn fbm_fast(p: vec3<f32>) -> f32 {
+    var val = 0.0;
+    var amp = 0.5;
+    var pos = p;
+    val += noise(pos) * amp; pos *= 2.02; amp *= 0.5;
+    val += noise(pos) * amp;
+    return val;
+}
+
 fn dither(frag_coord: vec2<f32>) -> f32 {
     let magic = vec3<f32>(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(frag_coord, magic.xy)));
 }
 
-// --- WEATHER LOGIC ---
+// --- WEATHER ---
 fn get_regional_weather(world_xz: vec2<f32>) -> vec2<f32> {
     let scale = 0.0003;
     let scroll = vec2<f32>(camera.time * 2.0, 0.0);
@@ -83,133 +106,10 @@ fn get_regional_weather(world_xz: vec2<f32>) -> vec2<f32> {
     return vec2<f32>(w, rain_amt);
 }
 
-// --- COMPUTE SHADER: RAIN PHYSICS (Restored) ---
-@compute @workgroup_size(64)
-fn cs_rain(@builtin(global_invocation_id) id: vec3<u32>) {
-    let idx = id.x;
-    if (idx >= arrayLength(&particles)) { return; }
-
-    var p = particles[idx];
-
-    // Physics: Gravity + Wind
-    let wind_force = vec3<f32>(camera.wind.x * 20.0, 0.0, camera.wind.y * 20.0);
-    let fall_vel = p.vel.y; // Base falling speed stored in Y
-    let velocity = vec3<f32>(wind_force.x, fall_vel, wind_force.z);
-
-    let dt = 0.016;
-    p.pos += vec4<f32>(velocity * dt, 0.0);
-
-    // Wrapping Logic (Infinite Rain Field)
-    let range_h = 60.0;
-    let range_y = 40.0;
-    let center = camera.camera_pos;
-    let dist = p.pos.xyz - center;
-
-    // Wrap X/Z
-    if (dist.x > range_h) { p.pos.x -= range_h * 2.0; }
-    if (dist.x < -range_h) { p.pos.x += range_h * 2.0; }
-    if (dist.z > range_h) { p.pos.z -= range_h * 2.0; }
-    if (dist.z < -range_h) { p.pos.z += range_h * 2.0; }
-
-    // Wrap Y (Vertical)
-    if (dist.y < -range_y) { p.pos.y += range_y * 2.0; }
-    if (dist.y > range_y) { p.pos.y -= range_y * 2.0; }
-
-    particles[idx] = p;
-}
-
-// --- VERTEX SHADER: RAIN RENDERING ---
-@vertex
-fn vs_rain(
-    @builtin(vertex_index) v_idx: u32,
-    @builtin(instance_index) i_idx: u32
-) -> RainVertexOutput {
-    var out: RainVertexOutput;
-
-    // Read from Storage Buffer
-    let p = particles[i_idx];
-    let center = p.pos.xyz;
-    let scale = p.pos.w;
-
-    // 1. Weather & Masking Check
-    let w_data = get_regional_weather(center.xz);
-    let local_rain_intensity = w_data.y;
-
-    // Cloud height check
-    let c_bottom = mix(130.0, 90.0, w_data.x);
-    let height_mask = 1.0 - smoothstep(c_bottom - 10.0, c_bottom, center.y);
-
-    // 2. Billboard Geometry
-    let wind_force = vec3<f32>(camera.wind.x * 20.0, 0.0, camera.wind.y * 20.0);
-    let vel = vec3<f32>(wind_force.x, p.vel.y, wind_force.z);
-    let dir = normalize(vel);
-
-    let w = 0.03 * scale;
-    let h = 0.8 * scale;
-
-    var pos = vec3<f32>(0.0);
-    var uv = vec2<f32>(0.0);
-
-    // Align to velocity and view
-    let view_vec = normalize(center - camera.camera_pos);
-    let right = normalize(cross(view_vec, dir));
-
-    if (v_idx == 0u) { pos = -right * w + dir * h; uv = vec2<f32>(0.0, 0.0); }
-    if (v_idx == 1u) { pos =  right * w + dir * h; uv = vec2<f32>(1.0, 0.0); }
-    if (v_idx == 2u) { pos = -right * w - dir * h; uv = vec2<f32>(0.0, 1.0); }
-    if (v_idx == 3u) { pos =  right * w - dir * h; uv = vec2<f32>(1.0, 1.0); }
-
-    let world_pos = center + pos;
-    out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
-    out.uv = uv;
-
-    // 3. Fade Logic
-    let d = distance(center, camera.camera_pos);
-    let dist_fade = 1.0 - smoothstep(40.0, 60.0, d);
-
-    out.alpha = camera.rain * local_rain_intensity * height_mask * dist_fade;
-
-    return out;
-}
-
-@fragment
-fn fs_rain(in: RainVertexOutput) -> @location(0) vec4<f32> {
-    if (in.alpha < 0.01) { discard; }
-    let x_fade = 1.0 - abs(in.uv.x * 2.0 - 1.0);
-    let y_fade = 1.0 - abs(in.uv.y * 2.0 - 1.0);
-
-    // Lit by lightning
-    let lightning = camera.lightning_color * camera.lightning_intensity * 0.5;
-    let col = vec3<f32>(0.7, 0.8, 0.9) + lightning;
-
-    return vec4<f32>(col, in.alpha * x_fade * y_fade * 0.6);
-}
-
-// --- MAIN SCENE ---
-
-@vertex
-fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
-    var out: VertexOutput;
-    var uvs = array<vec2<f32>, 3>(vec2<f32>(0.0, 0.0), vec2<f32>(2.0, 0.0), vec2<f32>(0.0, 2.0));
-    let uv = uvs[in_vertex_index];
-    let pos = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
-    out.uv = uv;
-    out.clip_position = vec4<f32>(pos, 0.0, 1.0);
-    return out;
-}
-
+// --- SKYBOX ---
 fn get_sun_pos() -> vec3<f32> {
     let angle = camera.day_progress * 6.28318;
     return normalize(vec3<f32>(sin(angle), cos(angle) * 0.8, -0.4));
-}
-
-fn get_sun_light_color(sun_y: f32) -> vec3<f32> {
-    if (sun_y > 0.15) { return vec3<f32>(1.0, 0.98, 0.92); }
-    if (sun_y > -0.15) {
-        let t = (sun_y + 0.15) / 0.3;
-        return mix(vec3<f32>(1.0, 0.4, 0.1), vec3<f32>(1.0, 0.98, 0.92), t);
-    }
-    return vec3<f32>(0.02, 0.02, 0.05);
 }
 
 fn get_moon_pos() -> vec3<f32> { return -get_sun_pos(); }
@@ -223,6 +123,7 @@ fn get_environment_light() -> mat3x3<f32> {
     var ambient = vec3<f32>(0.0);
 
     if (sun_h > -0.2) {
+        dir = sun_dir;
         if (sun_h > 0.1) {
             color = vec3<f32>(1.0, 0.98, 0.9);
             ambient = vec3<f32>(0.6, 0.8, 1.0);
@@ -242,6 +143,7 @@ fn get_environment_light() -> mat3x3<f32> {
         let fade = smoothstep(-0.2, 0.0, moon_h);
         color *= fade;
     }
+
     let storm_factor = camera.weather_offset; // Approx
     color = mix(color, color * 0.1, storm_factor);
     ambient = mix(ambient, ambient * 0.2, storm_factor);
@@ -255,19 +157,28 @@ fn get_sky_color(view_dir: vec3<f32>, sun_dir: vec3<f32>, weather: f32) -> vec3<
     let set_z = vec3<f32>(0.2, 0.1, 0.4); let set_h = vec3<f32>(0.9, 0.5, 0.1);
     let night_z = vec3<f32>(0.01, 0.01, 0.04); let night_h = vec3<f32>(0.02, 0.03, 0.08);
 
-    var sky_z = day_z; var sky_h = day_h;
+    var sky_z = day_z;
+    var sky_h = day_h;
+
     if (sun_h < 0.2 && sun_h > -0.2) {
         let t = smoothstep(-0.2, 0.2, sun_h);
+        // FIXED: Using correct variable names
         sky_z = mix(night_z, mix(set_z, day_z, t), t);
         sky_h = mix(night_h, mix(set_h, day_h, t), t);
-    } else if (sun_h <= -0.2) { sky_z = night_z; sky_h = night_h; }
+    } else if (sun_h <= -0.2) {
+        // FIXED: Using correct variable names
+        sky_z = night_z;
+        sky_h = night_h;
+    }
 
     let storm_dark = mix(1.0, 0.15, weather);
-    sky_z *= storm_dark; sky_h *= storm_dark;
+    sky_z *= storm_dark;
+    sky_h *= storm_dark;
 
     let horizon = pow(1.0 - max(view_dir.y, 0.0), 3.0);
     var color = mix(sky_z, sky_h, horizon);
 
+    // Stars
     if (sun_h < 0.1 && weather < 0.8) {
         let p = view_dir * 150.0;
         let star_noise = hash(floor(p));
@@ -278,18 +189,153 @@ fn get_sky_color(view_dir: vec3<f32>, sun_dir: vec3<f32>, weather: f32) -> vec3<
     return color;
 }
 
+// --- COMPUTE PHYSICS ---
+@compute @workgroup_size(64)
+fn cs_rain(@builtin(global_invocation_id) id: vec3<u32>) {
+    let idx = id.x;
+    if (idx >= arrayLength(&particles)) { return; }
+
+    var p = particles[idx];
+
+    let wind_force = vec3<f32>(camera.wind.x * 20.0, 0.0, camera.wind.y * 20.0);
+    let velocity = vec3<f32>(wind_force.x, p.vel.y, wind_force.z);
+
+    let dt = 0.016;
+    p.pos += vec4<f32>(velocity * dt, 0.0);
+
+    let range_h = 60.0;
+    let range_y = 40.0;
+    let center = camera.camera_pos;
+
+    let dist = p.pos.xyz - center;
+
+    if (dist.x > range_h) { p.pos.x -= range_h * 2.0; }
+    if (dist.x < -range_h) { p.pos.x += range_h * 2.0; }
+    if (dist.z > range_h) { p.pos.z -= range_h * 2.0; }
+    if (dist.z < -range_h) { p.pos.z += range_h * 2.0; }
+    if (dist.y < -range_y) { p.pos.y += range_y * 2.0; }
+    if (dist.y > range_y) { p.pos.y -= range_y * 2.0; }
+
+    particles[idx] = p;
+}
+
+// --- RAIN VERTEX ---
+@vertex
+fn vs_rain(
+    @builtin(vertex_index) v_idx: u32,
+    @builtin(instance_index) i_idx: u32
+) -> RainVertexOutput {
+    var out: RainVertexOutput;
+
+    let p = particles[i_idx];
+    let center = p.pos.xyz;
+    let scale = p.pos.w;
+
+    let w_data = get_regional_weather(center.xz);
+    let c_bottom = mix(130.0, 90.0, w_data.x);
+    let height_mask = 1.0 - smoothstep(c_bottom - 10.0, c_bottom, center.y);
+
+    let wind_force = vec3<f32>(camera.wind.x * 20.0, 0.0, camera.wind.y * 20.0);
+    let vel = vec3<f32>(wind_force.x, p.vel.y, wind_force.z);
+    let dir = normalize(vel);
+
+    let w = 0.03 * scale;
+    let h = 0.8 * scale;
+
+    var offset = vec3<f32>(0.0);
+    var uv = vec2<f32>(0.0);
+
+    let view_vec = normalize(center - camera.camera_pos);
+    let right = normalize(cross(view_vec, dir));
+
+    if (v_idx == 0u) { offset = -right * w + dir * h; uv = vec2<f32>(0.0, 0.0); }
+    if (v_idx == 1u) { offset =  right * w + dir * h; uv = vec2<f32>(1.0, 0.0); }
+    if (v_idx == 2u) { offset = -right * w - dir * h; uv = vec2<f32>(0.0, 1.0); }
+    if (v_idx == 3u) { offset =  right * w - dir * h; uv = vec2<f32>(1.0, 1.0); }
+
+    let world_pos = center + offset;
+    out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
+    out.uv = uv;
+    out.world_pos = world_pos;
+
+    let d = distance(center, camera.camera_pos);
+    let dist_fade = 1.0 - smoothstep(40.0, 60.0, d);
+
+    out.alpha = camera.rain * w_data.y * dist_fade * height_mask;
+
+    return out;
+}
+
+@fragment
+fn fs_rain(in: RainVertexOutput) -> @location(0) vec4<f32> {
+    if (in.alpha < 0.01) { discard; }
+
+    let x_fade = 1.0 - abs(in.uv.x * 2.0 - 1.0);
+    let y_fade = 1.0 - abs(in.uv.y * 2.0 - 1.0);
+
+    let l_vec = camera.lightning_pos - in.world_pos;
+    let l_dist_sq = dot(l_vec, l_vec);
+    let l_att = 1.0 / (1.0 + l_dist_sq * 0.0005);
+    let lightning = camera.lightning_color * camera.lightning_intensity * 20.0 * l_att;
+
+    let col = vec3<f32>(0.7, 0.8, 0.9) + lightning;
+
+    return vec4<f32>(col, in.alpha * x_fade * y_fade * 0.6);
+}
+
+// --- VOXEL RENDERER ---
+@vertex
+fn vs_voxel(in: VoxelVertexInput) -> VoxelVertexOutput {
+    var out: VoxelVertexOutput;
+    let world_pos = vec4<f32>(in.position, 1.0);
+    out.clip_position = camera.view_proj * world_pos;
+    out.color = in.color;
+    out.normal = in.normal;
+    out.world_pos = in.position;
+    return out;
+}
+
+@fragment
+fn fs_voxel(in: VoxelVertexOutput) -> @location(0) vec4<f32> {
+    let env = get_environment_light();
+    let light_dir = env[0];
+    let light_col = env[1];
+    let ambient = env[2];
+
+    let diff = max(dot(in.normal, light_dir), 0.0);
+    let lightning = camera.lightning_color * camera.lightning_intensity * 0.5;
+    let lighting = ambient + (light_col * diff) + lightning;
+
+    let final_col = in.color * lighting;
+
+    let dist = distance(in.world_pos, camera.camera_pos);
+    let fog_factor = 1.0 - exp(-dist * 0.002);
+
+    // Fog Color should match sky at horizon
+    let view_dir = normalize(in.world_pos - camera.camera_pos);
+    let w_data = get_regional_weather(in.world_pos.xz);
+    let fog_color = get_sky_color(view_dir, get_sun_pos(), w_data.x);
+
+    return vec4<f32>(mix(final_col, fog_color, fog_factor), 1.0);
+}
+
+// --- CLOUDS / BLIT ---
+@vertex
+fn vs_main(@builtin(vertex_index) in_vertex_index: u32) -> VertexOutput {
+    var out: VertexOutput;
+    var uvs = array<vec2<f32>, 3>(vec2<f32>(0.0, 0.0), vec2<f32>(2.0, 0.0), vec2<f32>(0.0, 2.0));
+    let uv = uvs[in_vertex_index];
+    let pos = vec2<f32>(uv.x * 2.0 - 1.0, 1.0 - uv.y * 2.0);
+    out.uv = uv;
+    out.clip_position = vec4<f32>(pos, 1.0, 1.0); // Z=1.0 (Far Plane)
+    return out;
+}
+
 fn intersect_slab(ro: vec3<f32>, rd: vec3<f32>, y_min: f32, y_max: f32) -> vec2<f32> {
     let inv_dir_y = 1.0 / (rd.y + 0.00001);
     let t0 = (y_min - ro.y) * inv_dir_y;
     let t1 = (y_max - ro.y) * inv_dir_y;
     return vec2<f32>(min(t0, t1), max(t0, t1));
-}
-
-fn fbm_fast(p: vec3<f32>) -> f32 {
-    var val = 0.0; var amp = 0.5; var pos = p;
-    val += noise(pos) * amp; pos *= 2.02; amp *= 0.5;
-    val += noise(pos) * amp;
-    return val;
 }
 
 fn get_cloud_density(p: vec3<f32>, local_weather: f32) -> f32 {
@@ -329,7 +375,6 @@ fn fs_clouds(in: VertexOutput) -> @location(0) vec4<f32> {
     let sky_weather = w_data.x;
 
     var color = get_sky_color(view_dir, sun_pos, sky_weather);
-
     let lightning_flash = camera.lightning_color * camera.lightning_intensity * 0.3;
     color += lightning_flash * 0.1;
 
@@ -351,7 +396,6 @@ fn fs_clouds(in: VertexOutput) -> @location(0) vec4<f32> {
                 var t = t_start + step_size * rnd;
                 var total_trans = 1.0;
                 var acc_color = vec3<f32>(0.0);
-
                 let den_scale = mix(0.02, 0.15, sky_weather);
                 let cos_theta = dot(view_dir, light_dir);
                 let phase = 0.6 + 0.4 * pow(0.5 * (cos_theta + 1.0), 8.0);
@@ -359,17 +403,13 @@ fn fs_clouds(in: VertexOutput) -> @location(0) vec4<f32> {
 
                 for (var i = 0; i < steps; i++) {
                     if (total_trans < 0.01) { break; }
-
                     let pos = camera.camera_pos + view_dir * t;
                     let local_w_data = get_regional_weather(pos.xz);
                     let local_w = local_w_data.x;
-
                     let h = (pos.y - c_bottom) / (c_top - c_bottom);
                     let h_fade = smoothstep(0.0, 0.2, h) * smoothstep(1.0, 0.8, h);
-
                     let d = get_cloud_density(pos, local_w);
                     let loc_den = d * h_fade;
-
                     if (loc_den > 0.001) {
                         let step_od = loc_den * step_size * den_scale;
                         let step_trans = exp(-step_od);
