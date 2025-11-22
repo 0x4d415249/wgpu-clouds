@@ -1,7 +1,4 @@
-//! Optimized Greedy Mesher ported for WGPU.
-//! Outputs vertices with Position, Normal, UV, Bounds (for tiling), and Color.
-
-use crate::chunk::{CHUNK_HEIGHT, CHUNK_SIZE, Chunk};
+use crate::chunk::{CHUNK_SIZE, Chunk};
 use crate::data::{BlockGeometry, GameRegistry};
 use crate::texture::TextureAtlas;
 use bytemuck::{Pod, Zeroable};
@@ -18,25 +15,18 @@ pub struct VoxelVertex {
 
 const UV_EPSILON: f32 = 0.0001;
 
-struct MeshBuffers {
-    vertices: Vec<VoxelVertex>,
-    indices: Vec<u32>,
-}
-
 pub fn generate_mesh(
     chunk: &Chunk,
     registry: &GameRegistry,
     atlas: &TextureAtlas,
 ) -> (Vec<VoxelVertex>, Vec<u32>) {
-    let mut buffers = MeshBuffers {
-        vertices: Vec::new(),
-        indices: Vec::new(),
-    };
+    let mut vertices = Vec::with_capacity(2048);
+    let mut indices = Vec::with_capacity(2048);
 
-    greedy_cube_mesh(chunk, registry, atlas, &mut buffers);
-    cross_mesh(chunk, registry, atlas, &mut buffers);
+    greedy_cube_mesh(chunk, registry, atlas, &mut vertices, &mut indices);
+    cross_mesh(chunk, registry, atlas, &mut vertices, &mut indices);
 
-    (buffers.vertices, buffers.indices)
+    (vertices, indices)
 }
 
 const FACE_NORMALS: [[i32; 3]; 6] = [
@@ -52,7 +42,8 @@ fn greedy_cube_mesh(
     chunk: &Chunk,
     registry: &GameRegistry,
     atlas: &TextureAtlas,
-    buffers: &mut MeshBuffers,
+    vertices: &mut Vec<VoxelVertex>,
+    indices: &mut Vec<u32>,
 ) {
     let air = registry.get_block_def(0).unwrap();
 
@@ -63,20 +54,21 @@ fn greedy_cube_mesh(
         let normal_f32 = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
 
         let (u_axis, v_axis) = match axis {
-            0 => (2, 1), // X face -> Z, Y axes
-            1 => (0, 2), // Y face -> X, Z axes
-            2 => (0, 1), // Z face -> X, Y axes
+            0 => (2, 1), // X face -> Z, Y
+            1 => (0, 2), // Y face -> X, Z
+            2 => (0, 1), // Z face -> X, Y
             _ => unreachable!(),
         };
 
-        let i_limit = [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE][axis];
-        let j_limit = [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE][u_axis];
-        let k_limit = [CHUNK_SIZE, CHUNK_HEIGHT, CHUNK_SIZE][v_axis];
+        let i_limit = CHUNK_SIZE as i32;
+        let j_limit = CHUNK_SIZE as i32;
+        let k_limit = CHUNK_SIZE as i32;
 
-        let mut mask = vec![None; (j_limit * k_limit) as usize];
+        // 1D Mask for the slice
+        let mut mask = vec![None; (CHUNK_SIZE * CHUNK_SIZE)];
 
         for i in 0..i_limit {
-            // 1. Build Mask
+            // Populate mask
             let mut n = 0;
             for k in 0..k_limit {
                 for j in 0..j_limit {
@@ -88,17 +80,20 @@ fn greedy_cube_mesh(
                     let mut adj = pos;
                     adj[axis] += dir;
 
-                    let blk_curr = chunk.get_block(pos[0], pos[1], pos[2]);
+                    let blk_curr =
+                        chunk.get_block(pos[0] as u32, pos[1] as u32, pos[2] as u32) as u8;
+
+                    // Boundary check: If adjacent is out of bounds, we draw it (assuming air neighbors for simplicity/speed)
                     let blk_adj = if adj[0] >= 0
-                        && adj[0] < CHUNK_SIZE
+                        && adj[0] < CHUNK_SIZE as i32
                         && adj[1] >= 0
-                        && adj[1] < CHUNK_HEIGHT
+                        && adj[1] < CHUNK_SIZE as i32
                         && adj[2] >= 0
-                        && adj[2] < CHUNK_SIZE
+                        && adj[2] < CHUNK_SIZE as i32
                     {
-                        chunk.get_block(adj[0], adj[1], adj[2])
+                        chunk.get_block(adj[0] as u32, adj[1] as u32, adj[2] as u32) as u8
                     } else {
-                        0
+                        0 // Assume Air at boundary
                     };
 
                     let def_curr = registry.get_block_def(blk_curr).unwrap_or(air);
@@ -119,7 +114,7 @@ fn greedy_cube_mesh(
                 }
             }
 
-            // 2. Mesh Mask
+            // Mesh Mask
             let mut n = 0;
             for k in 0..k_limit {
                 for j in 0..j_limit {
@@ -157,15 +152,16 @@ fn greedy_cube_mesh(
                             du[u_axis] = w_f;
                             let mut dv = [0.0, 0.0, 0.0];
                             dv[v_axis] = h_f;
-
                             let mut base = [0.0, 0.0, 0.0];
                             base[axis] = i as f32 + if dir == 1 { 1.0 } else { 0.0 };
                             base[u_axis] = j as f32;
                             base[v_axis] = k as f32;
 
                             let cx = chunk.position[0] as f32 * CHUNK_SIZE as f32;
-                            let cz = chunk.position[1] as f32 * CHUNK_SIZE as f32;
+                            let cy = chunk.position[1] as f32 * CHUNK_SIZE as f32;
+                            let cz = chunk.position[2] as f32 * CHUNK_SIZE as f32;
                             base[0] += cx;
+                            base[1] += cy;
                             base[2] += cz;
 
                             let v0 = base;
@@ -177,16 +173,14 @@ fn greedy_cube_mesh(
                             ];
                             let v3 = [base[0] + dv[0], base[1] + dv[1], base[2] + dv[2]];
 
-                            // 2. Assign vertices to Logical Quad Slots (BL, BR, TR, TL) for Texture Orientation.
-                            // We choose these permutations to ensure the texture is upright and not mirrored.
                             let (p_bl, p_br, p_tr, p_tl) = match (axis, dir) {
-                                (0, 1) => (v0, v1, v2, v3),  // Right (X+): Standard (Texture Correct)
-                                (0, -1) => (v1, v0, v3, v2), // Left  (X-): Mirrored (Texture Correct)
-                                (1, 1) => (v3, v2, v1, v0), // Top   (Y+): Rotated/Flipped (Texture Correct-ish)
-                                (1, -1) => (v0, v1, v2, v3), // Bottom(Y-): Standard (Texture Correct)
-                                (2, 1) => (v0, v1, v2, v3), // Front (Z+): Standard (Texture Correct)
-                                (2, -1) => (v1, v0, v3, v2), // Back  (Z-): Mirrored (Texture Correct)
-                                _ => unreachable!(),
+                                (0, 1) => (v0, v1, v2, v3),
+                                (0, -1) => (v1, v0, v3, v2),
+                                (1, 1) => (v3, v2, v1, v0),
+                                (1, -1) => (v0, v1, v2, v3),
+                                (2, 1) => (v0, v1, v2, v3),
+                                (2, -1) => (v1, v0, v3, v2),
+                                _ => (v0, v1, v2, v3),
                             };
 
                             let bounds = [
@@ -195,38 +189,35 @@ fn greedy_cube_mesh(
                                 uv_rect.max[0] - UV_EPSILON,
                                 uv_rect.max[1] - UV_EPSILON,
                             ];
-
                             let tint = if def.needs_biome_tint_for_face(axis, dir) {
                                 [0.4, 0.8, 0.4, 1.0]
                             } else {
                                 [1.0; 4]
                             };
 
-                            let idx = buffers.vertices.len() as u32;
-
-                            // 3. Push Vertices
-                            buffers.vertices.push(VoxelVertex {
+                            let idx = vertices.len() as u32;
+                            vertices.push(VoxelVertex {
                                 position: p_bl,
                                 normal: normal_f32,
                                 uv: [0.0, h_f],
                                 bounds,
                                 color: tint,
                             });
-                            buffers.vertices.push(VoxelVertex {
+                            vertices.push(VoxelVertex {
                                 position: p_br,
                                 normal: normal_f32,
                                 uv: [w_f, h_f],
                                 bounds,
                                 color: tint,
                             });
-                            buffers.vertices.push(VoxelVertex {
+                            vertices.push(VoxelVertex {
                                 position: p_tr,
                                 normal: normal_f32,
                                 uv: [w_f, 0.0],
                                 bounds,
                                 color: tint,
                             });
-                            buffers.vertices.push(VoxelVertex {
+                            vertices.push(VoxelVertex {
                                 position: p_tl,
                                 normal: normal_f32,
                                 uv: [0.0, 0.0],
@@ -234,13 +225,8 @@ fn greedy_cube_mesh(
                                 color: tint,
                             });
 
-                            // 4. Push Indices
-                            // The X-axis (Axis 0) naturally generates normals pointing INWARDS due to the coordinate winding (Z x Y = -X).
-                            // We flip the indices for Axis 0 to point them OUTWARDS.
-                            // Y and Z axes generate correct normals with the standard winding.
                             if axis == 0 {
-                                // Flip Winding (0 -> 2 -> 1)
-                                buffers.indices.extend_from_slice(&[
+                                indices.extend_from_slice(&[
                                     idx,
                                     idx + 2,
                                     idx + 1,
@@ -249,8 +235,7 @@ fn greedy_cube_mesh(
                                     idx + 2,
                                 ]);
                             } else {
-                                // Standard Winding (0 -> 1 -> 2)
-                                buffers.indices.extend_from_slice(&[
+                                indices.extend_from_slice(&[
                                     idx,
                                     idx + 1,
                                     idx + 2,
@@ -259,10 +244,9 @@ fn greedy_cube_mesh(
                                     idx + 3,
                                 ]);
                             }
-
-                            // end
                         }
 
+                        // Clear Mask
                         for h in 0..height {
                             for w in 0..width {
                                 mask[n + w as usize + (h * j_limit) as usize] = None;
@@ -280,12 +264,14 @@ fn cross_mesh(
     chunk: &Chunk,
     registry: &GameRegistry,
     atlas: &TextureAtlas,
-    buffers: &mut MeshBuffers,
+    vertices: &mut Vec<VoxelVertex>,
+    indices: &mut Vec<u32>,
 ) {
-    for y in 0..CHUNK_HEIGHT {
-        for z in 0..CHUNK_SIZE {
-            for x in 0..CHUNK_SIZE {
-                let id = chunk.get_block(x, y, z);
+    let size = CHUNK_SIZE as u32;
+    for y in 0..size {
+        for z in 0..size {
+            for x in 0..size {
+                let id = chunk.get_block(x, y, z) as u8;
                 if id == 0 {
                     continue;
                 }
@@ -294,9 +280,9 @@ fn cross_mesh(
                     && let Some(tex) = def.get_texture_for_face(0, 0)
                     && let Some(rect) = atlas.get_uv(tex)
                 {
-                    let cx = (chunk.position[0] * CHUNK_SIZE + x) as f32;
-                    let cz = (chunk.position[1] * CHUNK_SIZE + z) as f32;
-                    let cy = y as f32;
+                    let cx = (chunk.position[0] * CHUNK_SIZE as i32) as f32 + x as f32;
+                    let cy = (chunk.position[1] * CHUNK_SIZE as i32) as f32 + y as f32;
+                    let cz = (chunk.position[2] * CHUNK_SIZE as i32) as f32 + z as f32;
 
                     let tint = if def.needs_biome_tint {
                         [0.4, 0.8, 0.4, 1.0]
@@ -304,30 +290,30 @@ fn cross_mesh(
                         [1.0; 4]
                     };
                     let bounds = [rect.min[0], rect.min[1], rect.max[0], rect.max[1]];
-                    let idx = buffers.vertices.len() as u32;
+                    let idx = vertices.len() as u32;
 
-                    buffers.vertices.push(VoxelVertex {
+                    vertices.push(VoxelVertex {
                         position: [cx, cy, cz],
                         normal: [0.0, 1.0, 0.0],
                         uv: [0.0, 1.0],
                         bounds,
                         color: tint,
                     });
-                    buffers.vertices.push(VoxelVertex {
+                    vertices.push(VoxelVertex {
                         position: [cx + 1.0, cy, cz + 1.0],
                         normal: [0.0, 1.0, 0.0],
                         uv: [1.0, 1.0],
                         bounds,
                         color: tint,
                     });
-                    buffers.vertices.push(VoxelVertex {
+                    vertices.push(VoxelVertex {
                         position: [cx + 1.0, cy + 1.0, cz + 1.0],
                         normal: [0.0, 1.0, 0.0],
                         uv: [1.0, 0.0],
                         bounds,
                         color: tint,
                     });
-                    buffers.vertices.push(VoxelVertex {
+                    vertices.push(VoxelVertex {
                         position: [cx, cy + 1.0, cz],
                         normal: [0.0, 1.0, 0.0],
                         uv: [0.0, 0.0],
@@ -335,22 +321,8 @@ fn cross_mesh(
                         color: tint,
                     });
 
-                    buffers.indices.extend_from_slice(&[
-                        idx,
-                        idx + 1,
-                        idx + 2,
-                        idx,
-                        idx + 2,
-                        idx + 3,
-                    ]);
-                    buffers.indices.extend_from_slice(&[
-                        idx,
-                        idx + 3,
-                        idx + 2,
-                        idx,
-                        idx + 2,
-                        idx + 1,
-                    ]);
+                    indices.extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);
+                    indices.extend_from_slice(&[idx, idx + 3, idx + 2, idx, idx + 2, idx + 1]);
                 }
             }
         }

@@ -1,47 +1,37 @@
-use crate::data::BlockId;
+pub const CHUNK_SIZE: usize = 32;
+pub const CHUNK_VOL: usize = CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE;
 
-pub const CHUNK_SIZE: i32 = 64;
-pub const CHUNK_HEIGHT: i32 = 255;
-pub const CHUNK_VOLUME: usize = (CHUNK_SIZE * CHUNK_HEIGHT * CHUNK_SIZE) as usize;
-
+#[derive(Clone)]
 pub struct Chunk {
-    pub position: [i32; 2], // Chunk coordinates (X, Z)
-    pub blocks: Vec<BlockId>,
+    pub position: [i32; 3],
+    pub blocks: Vec<u16>,
 }
 
 impl Chunk {
-    pub fn new(cx: i32, cz: i32) -> Self {
+    pub fn new(cx: i32, cy: i32, cz: i32) -> Self {
         Self {
-            position: [cx, cz],
-            blocks: vec![0; CHUNK_VOLUME],
+            position: [cx, cy, cz],
+            blocks: vec![0; CHUNK_VOL],
         }
     }
 
-    #[inline]
-    pub fn get_index(x: i32, y: i32, z: i32) -> Option<usize> {
-        if (0..CHUNK_SIZE).contains(&x)
-            && (0..CHUNK_HEIGHT).contains(&y)
-            && (0..CHUNK_SIZE).contains(&z)
-        {
-            Some(
-                (y as usize * (CHUNK_SIZE * CHUNK_SIZE) as usize)
-                    + (z as usize * CHUNK_SIZE as usize)
-                    + x as usize,
-            )
+    #[inline(always)]
+    pub fn get_block(&self, x: u32, y: u32, z: u32) -> u16 {
+        // x + z*32 + y*32*32
+        // x | (z << 5) | (y << 10)
+        let idx = (x as usize) | ((z as usize) << 5) | ((y as usize) << 10);
+        if idx < CHUNK_VOL {
+            unsafe { *self.blocks.get_unchecked(idx) }
         } else {
-            None
+            0
         }
     }
 
-    #[inline]
-    pub fn get_block(&self, x: i32, y: i32, z: i32) -> BlockId {
-        Self::get_index(x, y, z).map_or(0, |i| self.blocks[i])
-    }
-
-    #[inline]
-    pub fn set_block(&mut self, x: i32, y: i32, z: i32, id: BlockId) {
-        if let Some(i) = Self::get_index(x, y, z) {
-            self.blocks[i] = id;
+    #[inline(always)]
+    pub fn set_block(&mut self, x: u32, y: u32, z: u32, id: u16) {
+        let idx = (x as usize) | ((z as usize) << 5) | ((y as usize) << 10);
+        if idx < CHUNK_VOL {
+            self.blocks[idx] = id;
         }
     }
 }
