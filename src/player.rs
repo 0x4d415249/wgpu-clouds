@@ -8,6 +8,7 @@ use winit::keyboard::KeyCode;
 pub enum GameMode {
     Survival,
     Creative,
+    Spectator,
 }
 
 pub struct Player {
@@ -80,13 +81,15 @@ impl Player {
             // Jump / Fly Up / Double Tap Logic
             KeyCode::Space => {
                 if pressed {
-                    // Check double tap
-                    if self.mode == GameMode::Creative && self.jump_timer > 0.0 {
-                        self.is_flying = !self.is_flying;
-                        println!("Flight: {}", self.is_flying);
-                        self.jump_timer = 0.0; // Reset
-                    } else {
-                        self.jump_timer = 0.25; // Start window
+                    if !self.move_up { // Only trigger on fresh press
+                        // Check double tap
+                        if (self.mode == GameMode::Creative || self.mode == GameMode::Spectator) && self.jump_timer > 0.0 {
+                            self.is_flying = !self.is_flying;
+                            println!("Flight: {}", self.is_flying);
+                            self.jump_timer = 0.0; // Reset
+                        } else {
+                            self.jump_timer = 0.25; // Start window
+                        }
                     }
                 }
                 self.move_up = pressed;
@@ -102,11 +105,14 @@ impl Player {
             KeyCode::F5 if pressed => {
                 self.mode = match self.mode {
                     GameMode::Creative => GameMode::Survival,
-                    GameMode::Survival => GameMode::Creative,
+                    GameMode::Survival => GameMode::Spectator,
+                    GameMode::Spectator => GameMode::Creative,
                 };
                 // Auto-disable flight if switching to survival
                 if self.mode == GameMode::Survival {
                     self.is_flying = false;
+                } else {
+                    self.is_flying = true;
                 }
                 println!("Game Mode: {:?}", self.mode);
             }
@@ -165,58 +171,107 @@ impl Player {
             self.walk_speed
         };
         if self.sprint {
-            speed *= if self.is_flying { 50.0 } else { 1.5 }; // Super fast flight for debugging
+            speed *= if self.is_flying { 2.0 } else { 1.5 }; // Reduced from 50.0 to 2.0 for sanity
         }
 
-        if self.is_flying {
+        if self.is_flying || self.mode == GameMode::Spectator {
             // --- FLYING PHYSICS ---
-            self.velocity = wish_dir * speed;
-
+            // Apply inertia/drag
+            let friction = if self.mode == GameMode::Spectator { 5.0 } else { 5.0 };
+            let drag_factor = (1.0 - friction * dt).max(0.0);
+            self.velocity *= drag_factor;
+            
+            // Acceleration
+            let accel = 50.0;
+            self.velocity += wish_dir * accel * dt;
+            
             // Vertical Flight
             if self.move_up {
-                self.velocity.y = speed;
+                self.velocity.y += accel * dt;
             } else if self.move_down {
-                self.velocity.y = -speed;
-            } else {
-                self.velocity.y = 0.0;
+                self.velocity.y -= accel * dt;
+            }
+            
+            // Cap speed
+            if self.velocity.magnitude() > speed {
+                self.velocity = self.velocity.normalize() * speed;
             }
 
-            // Smooth acceleration/friction for flight could be added,
-            // but direct control is better for debug/creative.
             self.position += self.velocity * dt;
             self.on_ground = false;
         } else {
             // --- WALKING/SURVIVAL PHYSICS ---
 
-            // Horizontal movement
-            let target_vel_x = wish_dir.x * speed;
-            let target_vel_z = wish_dir.z * speed;
+            // Physics Constants (Tuned for Minecraft-like feel)
+            let gravity = 32.0;
+            let jump_force = 9.0; // ~1.25m jump height
+            
+            let (accel, drag) = if self.on_ground {
+                if self.sprint { (60.0, 10.0) } else { (45.0, 10.0) }
+            } else {
+                (8.0, 0.5) // Air control
+            };
 
-            // Accelerate/Friction
-            let accel = if self.on_ground { 15.0 } else { 2.0 }; // Air control is lower
-            self.velocity.x += (target_vel_x - self.velocity.x) * accel * dt;
-            self.velocity.z += (target_vel_z - self.velocity.z) * accel * dt;
+            // Apply Drag (Friction)
+            // Damping factor: v_new = v_old * (1 - drag * dt)
+            // We use a slightly more stable integration for drag
+            let drag_factor = (1.0 - drag * dt).max(0.0);
+            self.velocity.x *= drag_factor;
+            self.velocity.z *= drag_factor;
+
+            // Apply Input Acceleration
+            if wish_dir.magnitude2() > 0.0 {
+                self.velocity.x += wish_dir.x * accel * dt;
+                self.velocity.z += wish_dir.z * accel * dt;
+            }
 
             // Gravity
-            self.velocity.y -= 30.0 * dt;
+            self.velocity.y -= gravity * dt;
+
+            // Terminal velocity check (optional, but good for stability)
+            self.velocity.y = self.velocity.y.max(-60.0);
 
             // Jump
             if self.move_up && self.on_ground {
-                self.velocity.y = 9.0;
+                self.velocity.y = jump_force;
                 self.on_ground = false;
             }
 
             // Collision
-            let (new_pos, new_vel, on_ground) = physics::resolve_collision(
-                world,
-                self.position,
-                self.velocity * dt,
-                Vector3::new(self.width, self.height, self.width),
-            );
+            // Spectator mode disables collision
+            if self.mode != GameMode::Spectator {
+                let (new_pos, new_vel, on_ground) = physics::resolve_collision(
+                    world,
+                    self.position,
+                    self.velocity * dt,
+                    Vector3::new(self.width, self.height, self.width),
+                );
 
-            self.position = new_pos;
-            self.velocity = new_vel / dt; // Convert displacement back to velocity
-            self.on_ground = on_ground;
+                self.position = new_pos;
+                self.velocity = new_vel / dt; 
+                self.on_ground = on_ground;
+                
+                // Fix for skyrocketing: If we are on ground, ensure Y velocity is not positive (unless jumping next frame)
+                // Actually, resolve_collision should zero out Y velocity if we hit ground.
+                // But if we are bunny hopping, we might be adding jump force while still "on ground" from previous frame?
+                // No, jump logic sets on_ground = false.
+                
+                // The issue might be `new_vel / dt`. If `dt` is very small, `new_vel` (displacement) / `dt` can be huge.
+                // `resolve_collision` returns modified displacement.
+                // If we hit the ground, `new_vel.y` becomes 0.0.
+                // So `self.velocity.y` becomes 0.0.
+                
+                // However, if we hit a wall or step up, `new_vel` might have small adjustments that get amplified by `1/dt`.
+                // It is safer to reconstruct velocity from the *actual* movement if we want, OR just trust `resolve_collision` zeroing.
+                
+                // Let's cap the velocity to avoid explosions.
+                self.velocity.x = self.velocity.x.clamp(-100.0, 100.0);
+                self.velocity.y = self.velocity.y.clamp(-100.0, 100.0);
+                self.velocity.z = self.velocity.z.clamp(-100.0, 100.0);
+                
+            } else {
+                self.position += self.velocity * dt;
+            }
         }
     }
 

@@ -15,6 +15,122 @@ fn vs_sky(@builtin(vertex_index) v_idx: u32) -> SkyboxVertexOutput {
     return out;
 }
 
+// --- SKY COLORS (Ported from skyColors.glsl) ---
+// Simplified for WGSL and specific use case
+fn get_sky_gradient(view_dir: vec3<f32>, sun_pos: vec3<f32>, weather: f32) -> vec3<f32> {
+    let sun_factor = max(dot(normalize(sun_pos), vec3<f32>(0.0, 1.0, 0.0)), 0.0);
+    let rain_factor = weather;
+    
+    // Base colors (approximate from GLSL)
+    let day_up = vec3<f32>(0.1, 0.4, 0.8);
+    let day_middle = vec3<f32>(0.4, 0.6, 0.9);
+    let day_down = vec3<f32>(0.7, 0.8, 0.9);
+    
+    let sunset_up = vec3<f32>(0.2, 0.1, 0.3);
+    let sunset_middle = vec3<f32>(0.7, 0.3, 0.1);
+    let sunset_down = vec3<f32>(0.9, 0.6, 0.2);
+    
+    let night_up = vec3<f32>(0.0, 0.0, 0.02);
+    let night_middle = vec3<f32>(0.02, 0.02, 0.05);
+    let night_down = vec3<f32>(0.05, 0.05, 0.1);
+    
+    // Mix based on sun height (day/sunset/night)
+    // Simplified mixing logic
+    let is_day = smoothstep(-0.2, 0.2, sun_pos.y);
+    let is_sunset = 1.0 - abs(sun_pos.y * 5.0); // Peak at horizon
+    let is_sunset_clamped = clamp(is_sunset, 0.0, 1.0);
+    
+    var up = mix(night_up, day_up, is_day);
+    var middle = mix(night_middle, day_middle, is_day);
+    var down = mix(night_down, day_down, is_day);
+    
+    // Apply sunset
+    up = mix(up, sunset_up, is_sunset_clamped);
+    middle = mix(middle, sunset_middle, is_sunset_clamped);
+    down = mix(down, sunset_down, is_sunset_clamped);
+    
+    // Apply rain/weather
+    let rain_color = vec3<f32>(0.1, 0.12, 0.15);
+    up = mix(up, rain_color, rain_factor * 0.8);
+    middle = mix(middle, rain_color, rain_factor * 0.8);
+    down = mix(down, rain_color, rain_factor * 0.8);
+    
+    // Gradient mixing based on view direction
+    let v_dot_u = view_dir.y;
+    let horizon = smoothstep(-0.1, 0.3, v_dot_u);
+    let zenith = smoothstep(0.3, 1.0, v_dot_u);
+    
+    var sky = mix(down, middle, horizon);
+    sky = mix(sky, up, zenith);
+    
+    return sky;
+}
+
+// --- AURORA ---
+fn get_aurora(view_dir: vec3<f32>, sun_h: f32) -> vec3<f32> {
+    // Aurora is usually in the north, but let's make it cover the sky a bit
+    // Map view_dir to a plane
+    if (view_dir.y < 0.0) { return vec3<f32>(0.0); }
+    
+    let t = camera.time * 0.5;
+    let pos = vec2<f32>(view_dir.x / view_dir.y, view_dir.z / view_dir.y) * 0.5;
+    
+    // FBM for aurora bands
+    var noise_val = 0.0;
+    var p = pos + vec2<f32>(t * 0.1, t * 0.05);
+    
+    noise_val += noise2d(p * 2.0) * 0.5;
+    noise_val += noise2d(p * 4.0 + vec2<f32>(t * 0.2, 0.0)) * 0.25;
+    noise_val += noise2d(p * 8.0) * 0.125;
+    
+    // Shape the aurora
+    // We want bands that fade out at horizon and zenith
+    let horizon_fade = smoothstep(0.0, 0.2, view_dir.y);
+    let zenith_fade = 1.0 - smoothstep(0.8, 1.0, view_dir.y);
+    
+    let intensity = smoothstep(0.4, 0.8, noise_val) * horizon_fade * zenith_fade;
+    
+    // Colors (Green/Purple/Blue)
+    let color_a = vec3<f32>(0.0, 1.0, 0.5); // Green
+    let color_b = vec3<f32>(0.5, 0.0, 1.0); // Purple
+    
+    // Mix colors based on noise or position
+    let color_mix = smoothstep(0.3, 0.7, noise2d(p * 1.5));
+    let aurora_col = mix(color_a, color_b, color_mix);
+    
+    // Fade in/out based on night depth
+    let night_factor = smoothstep(-0.2, -0.5, sun_h);
+    
+    return aurora_col * intensity * night_factor * 0.5; // Scale brightness
+}
+
+
+// --- CLOUDS (Ported from reimaginedClouds.glsl) ---
+// hash and noise are inherited from common.wgsl
+
+fn fbm_clouds(p: vec3<f32>) -> f32 {
+    var val = 0.0; var amp = 0.5; var pos = p;
+    val += noise(pos) * amp; pos *= 2.02; amp *= 0.5;
+    val += noise(pos) * amp; pos *= 2.03; amp *= 0.5;
+    val += noise(pos) * amp;
+    return val;
+}
+
+fn get_volumetric_cloud_density(pos: vec3<f32>, weather: f32) -> f32 {
+    let time_offset = vec3<f32>(camera.time * 5.0, 0.0, camera.time * 2.0);
+    let p = (pos + time_offset) * 0.002; // Scale
+    
+    var n = fbm_clouds(p);
+    
+    // Shape
+    let coverage = mix(0.4, 0.7, weather); // Increase coverage with rain
+    let density = smoothstep(1.0 - coverage, 1.0 - coverage + 0.1, n);
+    
+    return density;
+}
+
+// intersect_slab is inherited from weather.wgsl
+
 @fragment
 fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
     let ndc = vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, 1.0, 1.0);
@@ -23,7 +139,7 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
     let rnd = dither(in.clip_position.xy);
 
     let depth_val = textureLoad(t_depth, vec2<i32>(in.clip_position.xy), 0);
-
+    
     // Depth Reconstruction
     let geom_ndc = vec4<f32>(in.uv.x * 2.0 - 1.0, 1.0 - in.uv.y * 2.0, depth_val, 1.0);
     let geom_pos_hom = camera.inv_view_proj * geom_ndc;
@@ -39,95 +155,89 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
 
     // --- Draw Sky Background ---
     var color = vec3<f32>(0.0);
+    
+    // Use new gradient function
+    color = get_sky_gradient(view_dir, sun_pos, sky_weather);
+    
     if (is_sky) {
-        color = get_sky_color(view_dir, sun_pos, sky_weather);
+        // Stars
         color += get_stars(view_dir, sun_pos.y, sky_weather);
-        let lightning_flash = camera.lightning_color * camera.lightning_intensity * 0.3;
-        color += lightning_flash * 0.1;
-        if (env[0].y > 0.0) {
-             color += env[1] * smoothstep(0.9995, 0.9998, dot(view_dir, env[0])) * 5.0;
-        } else {
-             color += vec3<f32>(0.8, 0.9, 1.0) * smoothstep(0.9985, 0.999, dot(view_dir, get_moon_pos())) * 5.0;
-        }
-        let w_data_near = get_regional_weather(camera.camera_pos.xz);
-        if (w_data_near.y > 0.1 && sun_pos.y > 0.0) {
-            let bow_angle = dot(view_dir, -sun_pos);
-            let diff = bow_angle - 0.74;
-            if (abs(diff) < 0.04) {
-                let t = (diff / 0.04) * 0.5 + 0.5;
-                let bow = vec3<f32>(
-                    smoothstep(0.4, 0.6, t) - smoothstep(0.8, 1.0, t),
-                    smoothstep(0.2, 0.4, t) - smoothstep(0.6, 0.8, t),
-                    smoothstep(0.0, 0.2, t) - smoothstep(0.4, 0.6, t)
-                );
-                color += bow * 0.3 * w_data_near.y * sun_pos.y;
-            }
+        
+        // Sun/Moon Glare
+        let sun_dot = max(dot(view_dir, normalize(sun_pos)), 0.0);
+        let moon_dot = max(dot(view_dir, normalize(-sun_pos)), 0.0);
+        
+        let sun_glare = pow(sun_dot, 200.0) * 10.0; // Simple glare
+        let moon_glare = pow(moon_dot, 100.0) * 2.0;
+        
+        color += vec3<f32>(1.0, 0.9, 0.7) * sun_glare;
+        color += vec3<f32>(0.5, 0.6, 0.8) * moon_glare;
+        
+        // Aurora Borealis
+        // Only visible at night and if weather is clear (or slightly rainy/snowy in some biomes, but let's stick to clear night)
+        if (sun_pos.y < -0.2 && sky_weather < 0.5) {
+             let aurora = get_aurora(view_dir, sun_pos.y);
+             color += aurora;
         }
     }
 
     // --- Volumetric Clouds ---
-    // FIXED: Removed view_dir dependency to prevent "screen overlay" effect.
-    // Used only camera position to determine local cloud layer bounds variations.
-    let plane_noise = noise(camera.camera_pos * 0.001) * 20.0;
-    let c_bottom = mix(140.0, 90.0, sky_weather) + plane_noise * 0.5;
-    let c_top    = mix(170.0, 250.0, sky_weather) + plane_noise;
-
+    let c_bottom = 120.0;
+    let c_top = 220.0;
+    
     var total_trans = 1.0;
-
-    if (view_dir.y > -0.5 || camera.camera_pos.y > 50.0) {
+    
+    if (view_dir.y > 0.0 || camera.camera_pos.y > c_bottom) {
         let hit = intersect_slab(camera.camera_pos, view_dir, c_bottom, c_top);
-        let t_min = hit.x; let t_max = hit.y;
+        let t_min = hit.x; 
+        let t_max = hit.y;
 
         if (t_max > 0.0 && t_max > t_min) {
             let t_start = max(0.0, t_min);
             let t_end = min(t_max, min(geom_dist, 4000.0));
-
+            
             if (t_end > t_start) {
-                let steps = 40;
+                let steps = 32;
                 let step_size = (t_end - t_start) / f32(steps);
                 var t = t_start + step_size * rnd;
                 var acc_color = vec3<f32>(0.0);
-                let den_scale = mix(0.02, 0.15, sky_weather);
-                let phase = 0.6 + 0.4 * pow(0.5 * (dot(view_dir, env[0]) + 1.0), 8.0);
-                let ambient_base = env[2];
-
+                
+                let sun_dir = normalize(sun_pos);
+                let ambient = env[2];
+                let light_col = env[1];
+                
                 for (var i = 0; i < steps; i++) {
                     if (total_trans < 0.01) { break; }
                     let pos = camera.camera_pos + view_dir * t;
-
-                    let local_w = get_regional_weather(pos.xz).x;
-                    let h = (pos.y - c_bottom) / (c_top - c_bottom);
-                    let h_fade = smoothstep(0.0, 0.2, h) * smoothstep(1.0, 0.8, h);
-
-                    // FIXED: Soft blend against geometry
-                    // Fades cloud density as it gets close to the solid land to prevent harsh cuts.
-                    let depth_softness = smoothstep(0.0, 20.0, geom_dist - t);
-
-                    let loc_den = get_cloud_density(pos, local_w) * h_fade * depth_softness;
-
-                    if (loc_den > 0.001) {
-                        let step_od = loc_den * step_size * den_scale;
+                    
+                    let den = get_volumetric_cloud_density(pos, sky_weather);
+                    
+                    if (den > 0.01) {
+                        let step_od = den * step_size * 0.01;
                         let step_trans = exp(-step_od);
-                        let sun_shadow = get_light_transmittance(pos, env[0], local_w);
-                        let direct = env[1] * 2.0 * sun_shadow * phase * (0.5 + (1.0 - exp(-loc_den * 2.0)));
-                        let l_vec = camera.lightning_pos - pos;
-                        let l_att = 1.0 / (1.0 + dot(l_vec, l_vec) * 0.00003);
-                        let point_light = camera.lightning_color * camera.lightning_intensity * 150.0 * l_att;
-
-                        let light_res = mix(ambient_base * mix(mix(0.6, 0.02, local_w), 1.0, h), direct, 0.7) + point_light;
-
-                        acc_color += light_res * (1.0 - step_trans) * total_trans;
+                        
+                        // Lighting
+                        // Simple directional lighting for clouds
+                        let light_sample_pos = pos + sun_dir * 10.0;
+                        let light_den = get_volumetric_cloud_density(light_sample_pos, sky_weather);
+                        let shadow = exp(-light_den * 2.0); // Soft shadow
+                        
+                        let cloud_light = ambient + light_col * shadow * 2.0;
+                        
+                        acc_color += cloud_light * (1.0 - step_trans) * total_trans;
                         total_trans *= step_trans;
                     }
+                    
                     t += step_size;
                 }
-
-                let fog = 1.0 - exp(-t_start * 0.0003);
-                color = color * total_trans + mix(acc_color, color, fog);
+                
+                // Blend clouds
+                color = color * total_trans + acc_color;
             }
         }
     }
 
     let final_alpha = select(1.0 - total_trans, 1.0, is_sky);
-    return vec4<f32>(pow(color, vec3<f32>(1.0 / 2.2)), final_alpha);
+    return vec4<f32>(color, final_alpha);
 }
+

@@ -176,12 +176,26 @@ impl WorldManager {
         if let Some(chunk) = self.chunks.get_mut(&[cx, cy, cz]) {
             chunk.set_block(lx, ly, lz, id);
             let chunk_clone = chunk.clone();
+            
+            // Collect neighbors
+            let mut neighbors = HashMap::new();
+            for x in -1..=1 {
+                for y in -1..=1 {
+                    for z in -1..=1 {
+                        if x == 0 && y == 0 && z == 0 { continue; }
+                        if let Some(neighbor) = self.chunks.get(&[cx + x, cy + y, cz + z]) {
+                            neighbors.insert([x, y, z], neighbor.clone());
+                        }
+                    }
+                }
+            }
+            
             let tx = self.mesh_tx.clone();
             let reg = self.registry.clone();
             let atl = self.atlas.clone();
             let pos = [cx, cy, cz];
             rayon::spawn(move || {
-                let (v, i) = mesher::generate_mesh(&chunk_clone, &reg, &atl);
+                let (v, i) = mesher::generate_mesh(&chunk_clone, &neighbors, &reg, &atl);
                 let _ = tx.send(MeshResult::Meshed {
                     coords: pos,
                     vertices: v,
@@ -214,6 +228,7 @@ impl WorldManager {
             for z in -self.render_distance..=self.render_distance {
                 for y in -height_range..=height_range {
                     let pos = [cx + x, cy + y, cz + z];
+                    if pos[1] < -2 { continue; } // Don't generate below bedrock
                     if !self.chunks.contains_key(&pos) && !self.loading_queue.contains(&pos) {
                         let dist = x * x + y * y + z * z;
                         candidates.push((dist, pos));
@@ -263,11 +278,32 @@ impl WorldManager {
                 };
                 self.chunks.insert(pos, chunk.clone());
 
+                // Collect neighbors
+                // Note: We need to access self.chunks, but we are inside a method that borrows self.
+                // We can't easily clone neighbors here without cloning the whole map or doing it before.
+                // But we just inserted the new chunk.
+                // Let's try to collect neighbors.
+                let mut neighbors = HashMap::new();
+                let cx = pos[0];
+                let cy = pos[1];
+                let cz = pos[2];
+                
+                for x in -1..=1 {
+                    for y in -1..=1 {
+                        for z in -1..=1 {
+                            if x == 0 && y == 0 && z == 0 { continue; }
+                            if let Some(neighbor) = self.chunks.get(&[cx + x, cy + y, cz + z]) {
+                                neighbors.insert([x, y, z], neighbor.clone());
+                            }
+                        }
+                    }
+                }
+
                 let tx = self.mesh_tx.clone();
                 let reg = self.registry.clone();
                 let atl = self.atlas.clone();
                 rayon::spawn(move || {
-                    let (v, i) = mesher::generate_mesh(&chunk, &reg, &atl);
+                    let (v, i) = mesher::generate_mesh(&chunk, &neighbors, &reg, &atl);
                     let _ = tx.send(MeshResult::Meshed {
                         coords: pos,
                         vertices: v,

@@ -142,31 +142,92 @@ pub fn resolve_collision(
         }
     }
 
+    // Step Logic Helper
+    let step_height = 0.6;
+    let attempt_step = |current_pos: Vector3<f32>, move_vec: Vector3<f32>| -> Option<Vector3<f32>> {
+        // 1. Move up
+        let mut step_pos = current_pos;
+        step_pos.y += step_height;
+        if check_collision(world, &AABB::new(step_pos, half_size)) { return None; }
+        
+        // 2. Move forward
+        step_pos += move_vec;
+        if check_collision(world, &AABB::new(step_pos, half_size)) { return None; }
+        
+        // 3. Move down (snap)
+        // We need to find the floor at the new position
+        // Simple approach: just let gravity handle it next frame? 
+        // No, that causes a "hop". We want to snap down.
+        // Let's raycast down or just check collision downwards.
+        // For now, let's just return the stepped position and let gravity pull us down if needed, 
+        // but ideally we set y to the block top.
+        
+        // Optimization: Just return the stepped position. The Y-axis check next frame will snap us down 
+        // if we are floating, OR we can manually snap down here.
+        // Let's try to snap down `step_height` and see if we hit something.
+        let mut snap_pos = step_pos;
+        snap_pos.y -= step_height;
+        if check_collision(world, &AABB::new(snap_pos, half_size)) {
+            // We hit ground, so we are supported.
+            // Find exact floor height?
+            // This is getting complex for a simple step.
+            // Let's just return the up-and-forward position.
+            return Some(step_pos);
+        }
+        
+        // If we didn't hit ground, we stepped into air? That's valid (e.g. stepping onto a slab then off).
+        Some(step_pos)
+    };
+
     // X Axis
     if new_vel.x != 0.0 {
+        let start_x = new_pos;
         new_pos.x += new_vel.x;
         let aabb = AABB::new(new_pos, half_size);
         if check_collision(world, &aabb) {
-            if new_vel.x > 0.0 {
-                new_pos.x = aabb.max.x.floor() - half_size.x - epsilon;
-            } else {
-                new_pos.x = aabb.min.x.floor() + 1.0 + half_size.x + epsilon;
+            // Collision! Try to step.
+            let mut stepped = false;
+            if on_ground {
+                if let Some(step_pos) = attempt_step(start_x, Vector3::new(new_vel.x, 0.0, 0.0)) {
+                    new_pos = step_pos;
+                    stepped = true;
+                }
             }
-            new_vel.x = 0.0;
+            
+            if !stepped {
+                if new_vel.x > 0.0 {
+                    new_pos.x = aabb.max.x.floor() - half_size.x - epsilon;
+                } else {
+                    new_pos.x = aabb.min.x.floor() + 1.0 + half_size.x + epsilon;
+                }
+                new_vel.x = 0.0;
+            }
         }
     }
 
     // Z Axis
     if new_vel.z != 0.0 {
+        let start_z = new_pos;
         new_pos.z += new_vel.z;
         let aabb = AABB::new(new_pos, half_size);
         if check_collision(world, &aabb) {
-            if new_vel.z > 0.0 {
-                new_pos.z = aabb.max.z.floor() - half_size.z - epsilon;
-            } else {
-                new_pos.z = aabb.min.z.floor() + 1.0 + half_size.z + epsilon;
+             // Collision! Try to step.
+            let mut stepped = false;
+            if on_ground {
+                if let Some(step_pos) = attempt_step(start_z, Vector3::new(0.0, 0.0, new_vel.z)) {
+                    new_pos = step_pos;
+                    stepped = true;
+                }
             }
-            new_vel.z = 0.0;
+
+            if !stepped {
+                if new_vel.z > 0.0 {
+                    new_pos.z = aabb.max.z.floor() - half_size.z - epsilon;
+                } else {
+                    new_pos.z = aabb.min.z.floor() + 1.0 + half_size.z + epsilon;
+                }
+                new_vel.z = 0.0;
+            }
         }
     }
 

@@ -3,6 +3,8 @@ use crate::data::{BlockGeometry, GameRegistry};
 use crate::texture::TextureAtlas;
 use bytemuck::{Pod, Zeroable};
 
+const UV_EPSILON: f32 = 0.0;
+
 #[repr(C)]
 #[derive(Copy, Clone, Debug, Pod, Zeroable)]
 pub struct VoxelVertex {
@@ -49,17 +51,55 @@ impl VoxelVertex {
     }
 }
 
-const UV_EPSILON: f32 = 0.0001;
+fn get_wave_type(def: &crate::data::BlockDefinition) -> f32 {
+    // 0.0: None
+    // 1.0: Foliage (Cross models, grass, flowers)
+    // 2.0: Leaves
+    // 3.0: Water (handled by liquid mesh usually, but if cubes...)
+    // 4.0: Lava
+
+    if def.geometry == crate::data::BlockGeometry::Cross {
+        return 1.0;
+    }
+
+    // Check textures for keywords
+    let check_texture = |tex: &str| {
+        tex.contains("leaves") || tex.contains("vine")
+    };
+
+    match &def.textures {
+        Some(crate::data::BlockTextureInfo::Uniform { texture }) => {
+            if check_texture(texture) {
+                return 2.0;
+            }
+            if texture.contains("water") {
+                return 3.0;
+            }
+            if texture.contains("lava") {
+                return 4.0;
+            }
+        }
+        Some(crate::data::BlockTextureInfo::TopBottomSide { top, bottom, side }) => {
+             if check_texture(top) || check_texture(bottom) || check_texture(side) {
+                return 2.0;
+            }
+        }
+        _ => {}
+    }
+    
+    0.0
+}
 
 pub fn generate_mesh(
     chunk: &Chunk,
+    neighbors: &HashMap<[i32; 3], Chunk>, // Map of relative coords (e.g. [1,0,0]) to Chunk
     registry: &GameRegistry,
     atlas: &TextureAtlas,
 ) -> (Vec<VoxelVertex>, Vec<u32>) {
     let mut vertices = Vec::with_capacity(2048);
     let mut indices = Vec::with_capacity(2048);
 
-    greedy_cube_mesh(chunk, registry, atlas, &mut vertices, &mut indices);
+    greedy_cube_mesh(chunk, neighbors, registry, atlas, &mut vertices, &mut indices);
     cross_mesh(chunk, registry, atlas, &mut vertices, &mut indices);
 
     (vertices, indices)
@@ -74,8 +114,11 @@ const FACE_NORMALS: [[i32; 3]; 6] = [
     [0, 0, -1], // Back  (Z-)
 ];
 
+use std::collections::HashMap;
+
 fn greedy_cube_mesh(
     chunk: &Chunk,
+    neighbors: &HashMap<[i32; 3], Chunk>,
     registry: &GameRegistry,
     atlas: &TextureAtlas,
     vertices: &mut Vec<VoxelVertex>,
@@ -117,6 +160,7 @@ fn greedy_cube_mesh(
 
                     let blk_curr = chunk.get_block(pos[0] as u32, pos[1] as u32, pos[2] as u32);
 
+                    // Neighbor Check (Handling Chunk Borders)
                     let blk_adj = if adj[0] >= 0
                         && adj[0] < CHUNK_SIZE as i32
                         && adj[1] >= 0
@@ -126,7 +170,24 @@ fn greedy_cube_mesh(
                     {
                         chunk.get_block(adj[0] as u32, adj[1] as u32, adj[2] as u32)
                     } else {
-                        0
+                        // Calculate relative chunk offset
+                        let mut chunk_offset = [0, 0, 0];
+                        let mut local_adj = adj;
+                        
+                        if adj[0] < 0 { chunk_offset[0] = -1; local_adj[0] += CHUNK_SIZE as i32; }
+                        else if adj[0] >= CHUNK_SIZE as i32 { chunk_offset[0] = 1; local_adj[0] -= CHUNK_SIZE as i32; }
+                        
+                        if adj[1] < 0 { chunk_offset[1] = -1; local_adj[1] += CHUNK_SIZE as i32; }
+                        else if adj[1] >= CHUNK_SIZE as i32 { chunk_offset[1] = 1; local_adj[1] -= CHUNK_SIZE as i32; }
+                        
+                        if adj[2] < 0 { chunk_offset[2] = -1; local_adj[2] += CHUNK_SIZE as i32; }
+                        else if adj[2] >= CHUNK_SIZE as i32 { chunk_offset[2] = 1; local_adj[2] -= CHUNK_SIZE as i32; }
+
+                        if let Some(neighbor) = neighbors.get(&chunk_offset) {
+                            neighbor.get_block(local_adj[0] as u32, local_adj[1] as u32, local_adj[2] as u32)
+                        } else {
+                            0 // No neighbor loaded, assume air (visible)
+                        }
                     };
 
                     let def_curr = registry.get_block_def(blk_curr as u8).unwrap_or(air);
@@ -227,6 +288,8 @@ fn greedy_cube_mesh(
                             } else {
                                 [1.0; 4]
                             };
+                            let wave_type = get_wave_type(def);
+                            let color = [tint[0], tint[1], tint[2], wave_type];
 
                             let idx = vertices.len() as u32;
                             vertices.push(VoxelVertex {
@@ -234,28 +297,28 @@ fn greedy_cube_mesh(
                                 normal: normal_f32,
                                 uv: [0.0, h_f],
                                 bounds,
-                                color: tint,
+                                color,
                             });
                             vertices.push(VoxelVertex {
                                 position: p_br,
                                 normal: normal_f32,
                                 uv: [w_f, h_f],
                                 bounds,
-                                color: tint,
+                                color,
                             });
                             vertices.push(VoxelVertex {
                                 position: p_tr,
                                 normal: normal_f32,
                                 uv: [w_f, 0.0],
                                 bounds,
-                                color: tint,
+                                color,
                             });
                             vertices.push(VoxelVertex {
                                 position: p_tl,
                                 normal: normal_f32,
                                 uv: [0.0, 0.0],
                                 bounds,
-                                color: tint,
+                                color,
                             });
 
                             if axis == 0 {
@@ -322,6 +385,8 @@ fn cross_mesh(
                     } else {
                         [1.0; 4]
                     };
+                    let wave_type = get_wave_type(def);
+                    let color = [tint[0], tint[1], tint[2], wave_type];
                     let bounds = [rect.min[0], rect.min[1], rect.max[0], rect.max[1]];
                     let idx = vertices.len() as u32;
 
@@ -330,28 +395,28 @@ fn cross_mesh(
                         normal: [0.0, 1.0, 0.0],
                         uv: [0.0, 1.0],
                         bounds,
-                        color: tint,
+                        color,
                     });
                     vertices.push(VoxelVertex {
                         position: [cx + 1.0, cy, cz + 1.0],
                         normal: [0.0, 1.0, 0.0],
                         uv: [1.0, 1.0],
                         bounds,
-                        color: tint,
+                        color,
                     });
                     vertices.push(VoxelVertex {
                         position: [cx + 1.0, cy + 1.0, cz + 1.0],
                         normal: [0.0, 1.0, 0.0],
                         uv: [1.0, 0.0],
                         bounds,
-                        color: tint,
+                        color,
                     });
                     vertices.push(VoxelVertex {
                         position: [cx, cy + 1.0, cz],
                         normal: [0.0, 1.0, 0.0],
                         uv: [0.0, 0.0],
                         bounds,
-                        color: tint,
+                        color,
                     });
 
                     indices.extend_from_slice(&[idx, idx + 1, idx + 2, idx, idx + 2, idx + 3]);

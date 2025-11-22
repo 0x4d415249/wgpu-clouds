@@ -25,8 +25,8 @@ use crate::renderer::Renderer;
 use crate::texture::TextureAtlas;
 use crate::world::WorldManager;
 
-const BLOCKS_JSON: &str = include_str!("../../maricraft/assets/definitions/blocks.json");
-const BIOMES_JSON: &str = include_str!("../../maricraft/assets/definitions/biomes.json");
+const BLOCKS_JSON: &str = include_str!("../assets/definitions/blocks.json");
+const BIOMES_JSON: &str = include_str!("../assets/definitions/biomes.json");
 
 struct Game {
     renderer: Renderer,
@@ -113,12 +113,15 @@ impl ApplicationHandler for App {
                     KeyEvent {
                         physical_key: PhysicalKey::Code(key),
                         state,
+                        repeat,
                         ..
                     },
                 ..
             } => {
-                game.player.process_keyboard(key, state);
-                if state == ElementState::Pressed {
+                if !repeat {
+                    game.player.process_keyboard(key, state);
+                }
+                if state == ElementState::Pressed && !repeat {
                     match key {
                         KeyCode::Escape => {
                             game.mouse_captured = false;
