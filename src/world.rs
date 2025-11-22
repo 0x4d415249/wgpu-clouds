@@ -3,7 +3,7 @@ use crate::data::GameRegistry;
 use crate::mesher::{self, VoxelVertex};
 use crate::texture::TextureAtlas;
 use crossbeam_channel::{Receiver, Sender, unbounded};
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
@@ -21,50 +21,25 @@ pub struct ChunkMesh {
     pub index_count: u32,
 }
 
-// --- GPU GENERATOR ---
 struct GpuGenerator {
     pipeline: wgpu::ComputePipeline,
     bind_group_layout: wgpu::BindGroupLayout,
 }
 
 impl GpuGenerator {
-    fn new(device: &wgpu::Device, shader: &wgpu::ShaderModule) -> Self {
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Gen Layout"),
-            entries: &[
-                // Params
-                wgpu::BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Uniform,
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-                // Block Data
-                wgpu::BindGroupLayoutEntry {
-                    binding: 2,
-                    visibility: wgpu::ShaderStages::COMPUTE,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: false },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
-                    count: None,
-                },
-            ],
-        });
-
-        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+    fn new(
+        device: &wgpu::Device,
+        shader: &wgpu::ShaderModule,
+        bind_group_layout: wgpu::BindGroupLayout,
+    ) -> Self {
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             bind_group_layouts: &[&bind_group_layout],
             ..Default::default()
         });
 
         let pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
             label: Some("Terrain Gen"),
-            layout: Some(&layout),
+            layout: Some(&pipeline_layout),
             module: shader,
             entry_point: Some("cs_generate"),
             compilation_options: Default::default(),
@@ -78,20 +53,64 @@ impl GpuGenerator {
     }
 }
 
-// --- WORLD MANAGER ---
+// Buffer Pooling
+struct GenBuffers {
+    storage: wgpu::Buffer,
+    output: wgpu::Buffer,
+}
+
+struct BufferPool {
+    pool: VecDeque<GenBuffers>,
+}
+
+impl BufferPool {
+    fn new() -> Self {
+        Self {
+            pool: VecDeque::new(),
+        }
+    }
+
+    fn get(&mut self, device: &wgpu::Device) -> GenBuffers {
+        if let Some(bufs) = self.pool.pop_front() {
+            bufs
+        } else {
+            let size = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 4) as u64;
+            let storage = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Gen Storage Pool"),
+                size,
+                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
+                mapped_at_creation: false,
+            });
+            let output = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("Gen Map Pool"),
+                size,
+                usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            GenBuffers { storage, output }
+        }
+    }
+
+    fn return_buffers(&mut self, bufs: GenBuffers) {
+        self.pool.push_back(bufs);
+    }
+}
+
 pub struct WorldManager {
     pub chunks: HashMap<[i32; 3], Chunk>,
     pub meshes: HashMap<[i32; 3], ChunkMesh>,
 
-    // Channels
     mesh_tx: Sender<MeshResult>,
     mesh_rx: Receiver<MeshResult>,
-    gpu_tx: Sender<([i32; 3], Vec<u32>)>,
-    gpu_rx: Receiver<([i32; 3], Vec<u32>)>,
+    // GPU Rx: (TaskID, Coords, Data)
+    gpu_tx: Sender<([u64; 3], [i32; 3], Vec<u32>)>,
+    gpu_rx: Receiver<([u64; 3], [i32; 3], Vec<u32>)>,
 
-    // Async State
     gpu_gen: GpuGenerator,
-    pending_gpu_tasks: Vec<([i32; 3], wgpu::Buffer, wgpu::Buffer)>, // Pos, MapBuf, StorageBuf
+    // Stores (TaskID, Coords, Buffers)
+    pending_gpu_tasks: Vec<(u64, [i32; 3], GenBuffers)>,
+    buffer_pool: BufferPool,
+    next_task_id: u64,
 
     registry: Arc<GameRegistry>,
     atlas: Arc<TextureAtlas>,
@@ -103,7 +122,9 @@ pub struct WorldManager {
 impl WorldManager {
     pub fn new(
         device: &wgpu::Device,
+        _queue: &wgpu::Queue,
         shader: &wgpu::ShaderModule,
+        layout: wgpu::BindGroupLayout,
         registry: GameRegistry,
         atlas: TextureAtlas,
         render_distance: i32,
@@ -118,8 +139,10 @@ impl WorldManager {
             mesh_rx,
             gpu_tx,
             gpu_rx,
-            gpu_gen: GpuGenerator::new(device, shader),
+            gpu_gen: GpuGenerator::new(device, shader, layout),
             pending_gpu_tasks: Vec::new(),
+            buffer_pool: BufferPool::new(),
+            next_task_id: 0,
             registry: Arc::new(registry),
             atlas: Arc::new(atlas),
             render_distance,
@@ -178,76 +201,84 @@ impl WorldManager {
         let cy = (player_pos[1] / CHUNK_SIZE as f32).floor() as i32;
         let cz = (player_pos[2] / CHUNK_SIZE as f32).floor() as i32;
 
-        // 1. Identify and Sort Candidates
+        // Stop generating if buffers full
+        if self.pending_gpu_tasks.len() > 16 {
+            self.poll_gpu_tasks();
+            return;
+        }
+
         let mut candidates = Vec::new();
-        // Expanded vertical range for flying
         let height_range = 4;
 
         for x in -self.render_distance..=self.render_distance {
             for z in -self.render_distance..=self.render_distance {
                 for y in -height_range..=height_range {
                     let pos = [cx + x, cy + y, cz + z];
-
-                    // No hard height limits anymore, sky is the limit (literally)
-
                     if !self.chunks.contains_key(&pos) && !self.loading_queue.contains(&pos) {
-                        let dx = x;
-                        let dy = y * 2;
-                        let dz = z;
-                        let dist_sq = dx * dx + dy * dy + dz * dz;
-                        candidates.push((dist_sq, pos));
+                        let dist = x * x + y * y + z * z;
+                        candidates.push((dist, pos));
                     }
                 }
             }
         }
-
-        // Sort: Closest first
         candidates.sort_unstable_by_key(|k| k.0);
 
-        // 2. Dispatch Top N Requests
-        let max_requests = 16;
+        let max_requests = 2;
         let mut dispatched = 0;
         for (_, pos) in candidates {
             if dispatched >= max_requests {
                 break;
             }
-
             self.dispatch_gen(device, queue, pos);
             self.loading_queue.insert(pos);
             dispatched += 1;
         }
 
-        // 3. Poll GPU Results
-        while let Ok((pos, data)) = self.gpu_rx.try_recv() {
-            if let Some(idx) = self
+        self.poll_gpu_tasks();
+        self.poll_mesh_tasks(device);
+        self.unload_chunks(cx, cy, cz, height_range);
+    }
+
+    fn poll_gpu_tasks(&mut self) {
+        // Fix RX signature to match
+        while let Ok((_id_arr, pos, data)) = self.gpu_rx.try_recv() {
+            let id = _id_arr[0]; // Use dummy array wrapper for simple generic tuple matching if needed, here just ID
+
+            // Match task by ID
+            if let Some(index) = self
                 .pending_gpu_tasks
                 .iter()
-                .position(|(p, _, _)| *p == pos)
+                .position(|(tid, _, _)| *tid == id)
             {
-                self.pending_gpu_tasks.swap_remove(idx);
-            }
+                let (_, _, buffers) = self.pending_gpu_tasks.swap_remove(index);
 
-            let blocks: Vec<u16> = data.iter().map(|&x| x as u16).collect();
-            let chunk = Chunk {
-                position: pos,
-                blocks,
-            };
-            self.chunks.insert(pos, chunk.clone());
+                // CRITICAL FIX: Unmap exactly here, once
+                buffers.output.unmap();
+                self.buffer_pool.return_buffers(buffers);
 
-            let tx = self.mesh_tx.clone();
-            let reg = self.registry.clone();
-            let atl = self.atlas.clone();
-            rayon::spawn(move || {
-                let (v, i) = mesher::generate_mesh(&chunk, &reg, &atl);
-                let _ = tx.send(MeshResult::Meshed {
-                    coords: pos,
-                    vertices: v,
-                    indices: i,
+                let blocks: Vec<u16> = data.iter().map(|&x| x as u16).collect();
+                let chunk = Chunk {
+                    position: pos,
+                    blocks,
+                };
+                self.chunks.insert(pos, chunk.clone());
+
+                let tx = self.mesh_tx.clone();
+                let reg = self.registry.clone();
+                let atl = self.atlas.clone();
+                rayon::spawn(move || {
+                    let (v, i) = mesher::generate_mesh(&chunk, &reg, &atl);
+                    let _ = tx.send(MeshResult::Meshed {
+                        coords: pos,
+                        vertices: v,
+                        indices: i,
+                    });
                 });
-            });
+            }
         }
+    }
 
-        // 4. Poll Mesh Results
+    fn poll_mesh_tasks(&mut self, device: &wgpu::Device) {
         while let Ok(result) = self.mesh_rx.try_recv() {
             match result {
                 MeshResult::Meshed {
@@ -283,8 +314,9 @@ impl WorldManager {
                 }
             }
         }
+    }
 
-        // 5. Unload Far Chunks
+    fn unload_chunks(&mut self, cx: i32, cy: i32, cz: i32, height_range: i32) {
         self.chunks.retain(|&[x, y, z], _| {
             (x - cx).abs() <= self.render_distance + 2
                 && (z - cz).abs() <= self.render_distance + 2
@@ -298,19 +330,11 @@ impl WorldManager {
     }
 
     fn dispatch_gen(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pos: [i32; 3]) {
-        let size = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 4) as u64; // u32 array for shader
-        let storage_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Gen Storage"),
-            size,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_SRC,
-            mapped_at_creation: false,
-        });
-        let map_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Gen Map"),
-            size,
-            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let buffers = self.buffer_pool.get(device);
+        let size = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 4) as u64;
+
+        let task_id = self.next_task_id;
+        self.next_task_id += 1;
 
         #[repr(C)]
         #[derive(Copy, Clone, bytemuck::Pod, bytemuck::Zeroable)]
@@ -332,12 +356,12 @@ impl WorldManager {
             layout: &self.gpu_gen.bind_group_layout,
             entries: &[
                 wgpu::BindGroupEntry {
-                    binding: 1,
+                    binding: 0,
                     resource: param_buf.as_entire_binding(),
                 },
                 wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: storage_buf.as_entire_binding(),
+                    binding: 1,
+                    resource: buffers.storage.as_entire_binding(),
                 },
             ],
             label: None,
@@ -350,24 +374,26 @@ impl WorldManager {
             pass.set_bind_group(0, &bind_group, &[]);
             pass.dispatch_workgroups(8, 8, 8);
         }
-        encoder.copy_buffer_to_buffer(&storage_buf, 0, &map_buf, 0, size);
+        encoder.copy_buffer_to_buffer(&buffers.storage, 0, &buffers.output, 0, size);
         queue.submit(Some(encoder.finish()));
 
-        let slice = map_buf.slice(..);
+        let slice = buffers.output.slice(..);
         let tx = self.gpu_tx.clone();
         let coords = pos;
-        let map_buf_cloned = map_buf.clone();
+        // Clone handle for closure
+        let map_buf_cloned = buffers.output.clone();
 
         slice.map_async(wgpu::MapMode::Read, move |res| {
             if res.is_ok() {
                 let slice = map_buf_cloned.slice(..);
                 let data = slice.get_mapped_range();
                 let result: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
-                drop(data);
-                let _ = tx.send((coords, result));
+                drop(data); // Drop view before sending
+                // Send Task ID [task_id, 0, 0] to match type [u64; 3] for tuple simplicity or just change type
+                let _ = tx.send(([task_id, 0, 0], coords, result));
             }
         });
 
-        self.pending_gpu_tasks.push((pos, map_buf, storage_buf));
+        self.pending_gpu_tasks.push((task_id, pos, buffers));
     }
 }

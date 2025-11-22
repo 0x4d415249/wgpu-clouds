@@ -13,6 +13,42 @@ pub struct VoxelVertex {
     pub color: [f32; 4],
 }
 
+impl VoxelVertex {
+    pub fn desc<'a>() -> wgpu::VertexBufferLayout<'a> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<VoxelVertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &[
+                wgpu::VertexAttribute {
+                    offset: 0,
+                    shader_location: 0,
+                    format: wgpu::VertexFormat::Float32x3,
+                }, // Pos
+                wgpu::VertexAttribute {
+                    offset: 12,
+                    shader_location: 1,
+                    format: wgpu::VertexFormat::Float32x3,
+                }, // Norm
+                wgpu::VertexAttribute {
+                    offset: 24,
+                    shader_location: 2,
+                    format: wgpu::VertexFormat::Float32x2,
+                }, // UV
+                wgpu::VertexAttribute {
+                    offset: 32,
+                    shader_location: 3,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // Bounds
+                wgpu::VertexAttribute {
+                    offset: 48,
+                    shader_location: 4,
+                    format: wgpu::VertexFormat::Float32x4,
+                }, // Color
+            ],
+        }
+    }
+}
+
 const UV_EPSILON: f32 = 0.0001;
 
 pub fn generate_mesh(
@@ -54,9 +90,9 @@ fn greedy_cube_mesh(
         let normal_f32 = [normal[0] as f32, normal[1] as f32, normal[2] as f32];
 
         let (u_axis, v_axis) = match axis {
-            0 => (2, 1), // X face -> Z, Y
-            1 => (0, 2), // Y face -> X, Z
-            2 => (0, 1), // Z face -> X, Y
+            0 => (2, 1),
+            1 => (0, 2),
+            2 => (0, 1),
             _ => unreachable!(),
         };
 
@@ -64,8 +100,7 @@ fn greedy_cube_mesh(
         let j_limit = CHUNK_SIZE as i32;
         let k_limit = CHUNK_SIZE as i32;
 
-        // 1D Mask for the slice
-        let mut mask = vec![None; (CHUNK_SIZE * CHUNK_SIZE)];
+        let mut mask = vec![None; CHUNK_SIZE * CHUNK_SIZE];
 
         for i in 0..i_limit {
             // Populate mask
@@ -80,10 +115,8 @@ fn greedy_cube_mesh(
                     let mut adj = pos;
                     adj[axis] += dir;
 
-                    let blk_curr =
-                        chunk.get_block(pos[0] as u32, pos[1] as u32, pos[2] as u32) as u8;
+                    let blk_curr = chunk.get_block(pos[0] as u32, pos[1] as u32, pos[2] as u32);
 
-                    // Boundary check: If adjacent is out of bounds, we draw it (assuming air neighbors for simplicity/speed)
                     let blk_adj = if adj[0] >= 0
                         && adj[0] < CHUNK_SIZE as i32
                         && adj[1] >= 0
@@ -91,13 +124,13 @@ fn greedy_cube_mesh(
                         && adj[2] >= 0
                         && adj[2] < CHUNK_SIZE as i32
                     {
-                        chunk.get_block(adj[0] as u32, adj[1] as u32, adj[2] as u32) as u8
+                        chunk.get_block(adj[0] as u32, adj[1] as u32, adj[2] as u32)
                     } else {
-                        0 // Assume Air at boundary
+                        0
                     };
 
-                    let def_curr = registry.get_block_def(blk_curr).unwrap_or(air);
-                    let def_adj = registry.get_block_def(blk_adj).unwrap_or(air);
+                    let def_curr = registry.get_block_def(blk_curr as u8).unwrap_or(air);
+                    let def_adj = registry.get_block_def(blk_adj as u8).unwrap_or(air);
 
                     let visible = if def_curr.is_transparent {
                         def_curr.numeric_id != def_adj.numeric_id && def_adj.is_transparent
@@ -141,7 +174,7 @@ fn greedy_cube_mesh(
                             height += 1;
                         }
 
-                        let def = registry.get_block_def(blk_id).unwrap();
+                        let def = registry.get_block_def(blk_id as u8).unwrap();
                         if let Some(tex) = def.get_texture_for_face(axis, dir)
                             && let Some(uv_rect) = atlas.get_uv(tex)
                         {

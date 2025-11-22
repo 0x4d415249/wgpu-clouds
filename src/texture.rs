@@ -1,5 +1,3 @@
-//! Handles creating a texture atlas at runtime from a folder of images.
-
 use anyhow::Context;
 use image::{DynamicImage, GenericImage, RgbaImage};
 use std::collections::HashMap;
@@ -16,11 +14,9 @@ pub struct TextureAtlas {
 }
 
 impl TextureAtlas {
-    /// Loads all .png files from the specific directory and stitches them into an atlas.
     pub fn load_from_folder(path: &str) -> anyhow::Result<Self> {
         let mut images: Vec<(String, DynamicImage)> = Vec::new();
 
-        // Handle path checking gracefully
         if let Ok(dir) = std::fs::read_dir(path) {
             for entry in dir.flatten() {
                 let path = entry.path();
@@ -37,7 +33,6 @@ impl TextureAtlas {
             return Ok(Self::create_fallback());
         }
 
-        // Assume 16x16 textures for simplicity
         let tile_size = 16;
         let count = images.len() as u32;
         let atlas_width_tiles = (count as f32).sqrt().ceil() as u32;
@@ -56,12 +51,10 @@ impl TextureAtlas {
             let resized =
                 img.resize_exact(tile_size, tile_size, image::imageops::FilterType::Nearest);
 
-            // GenericImage::copy_from in image 0.25 takes &DynamicImage usually, or &impl GenericImage
             atlas_img
                 .copy_from(&resized, tile_x, tile_y)
                 .context("Failed to copy texture to atlas")?;
 
-            // Calculate UVs
             let u_min = tile_x as f32 / width as f32;
             let v_min = tile_y as f32 / height as f32;
             let u_max = (tile_x + tile_size) as f32 / width as f32;
@@ -93,7 +86,6 @@ impl TextureAtlas {
                 }
             }
         }
-
         let mut map = HashMap::new();
         map.insert(
             "default".to_string(),
@@ -102,7 +94,6 @@ impl TextureAtlas {
                 max: [1.0, 1.0],
             },
         );
-
         Self {
             image: img,
             uv_map: map,
@@ -112,4 +103,46 @@ impl TextureAtlas {
     pub fn get_uv(&self, name: &str) -> Option<&Rect> {
         self.uv_map.get(name).or_else(|| self.uv_map.get("default"))
     }
+}
+
+/// Helper to upload the atlas to the GPU
+pub fn create_atlas_texture(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    atlas: &TextureAtlas,
+) -> wgpu::Texture {
+    let texture_size = wgpu::Extent3d {
+        width: atlas.image.width(),
+        height: atlas.image.height(),
+        depth_or_array_layers: 1,
+    };
+
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        size: texture_size,
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        label: Some("Atlas Texture"),
+        view_formats: &[],
+    });
+
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &atlas.image,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4 * atlas.image.width()),
+            rows_per_image: Some(atlas.image.height()),
+        },
+        texture_size,
+    );
+
+    texture
 }
