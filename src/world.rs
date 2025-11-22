@@ -1,4 +1,4 @@
-use crate::chunk::{CHUNK_SIZE, Chunk};
+use crate::chunk::{CHUNK_SIZE, CHUNK_VOL, Chunk};
 use crate::data::GameRegistry;
 use crate::mesher::{self, VoxelVertex};
 use crate::texture::TextureAtlas;
@@ -331,7 +331,7 @@ impl WorldManager {
 
     fn dispatch_gen(&mut self, device: &wgpu::Device, queue: &wgpu::Queue, pos: [i32; 3]) {
         let buffers = self.buffer_pool.get(device);
-        let size = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE * 4) as u64;
+        let size = (CHUNK_VOL * 4) as u64;
 
         let task_id = self.next_task_id;
         self.next_task_id += 1;
@@ -346,10 +346,11 @@ impl WorldManager {
             chunk_pos: pos,
             seed: 1337,
         };
+
         let param_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             contents: bytemuck::cast_slice(&[params]),
             usage: wgpu::BufferUsages::UNIFORM,
-            label: None,
+            label: Some("Gen Param"),
         });
 
         let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -364,7 +365,7 @@ impl WorldManager {
                     resource: buffers.storage.as_entire_binding(),
                 },
             ],
-            label: None,
+            label: Some("Gen Bind Group"),
         });
 
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
@@ -372,15 +373,17 @@ impl WorldManager {
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor::default());
             pass.set_pipeline(&self.gpu_gen.pipeline);
             pass.set_bind_group(0, &bind_group, &[]);
-            pass.dispatch_workgroups(8, 8, 8);
+            // Dispatch: 64 / 4 = 16 workgroups per axis
+            pass.dispatch_workgroups(16, 16, 16);
         }
+
         encoder.copy_buffer_to_buffer(&buffers.storage, 0, &buffers.output, 0, size);
         queue.submit(Some(encoder.finish()));
 
+        // ... (mapping logic remains same) ...
         let slice = buffers.output.slice(..);
         let tx = self.gpu_tx.clone();
         let coords = pos;
-        // Clone handle for closure
         let map_buf_cloned = buffers.output.clone();
 
         slice.map_async(wgpu::MapMode::Read, move |res| {
@@ -388,8 +391,7 @@ impl WorldManager {
                 let slice = map_buf_cloned.slice(..);
                 let data = slice.get_mapped_range();
                 let result: Vec<u32> = bytemuck::cast_slice(&data).to_vec();
-                drop(data); // Drop view before sending
-                // Send Task ID [task_id, 0, 0] to match type [u64; 3] for tuple simplicity or just change type
+                drop(data);
                 let _ = tx.send(([task_id, 0, 0], coords, result));
             }
         });

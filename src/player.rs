@@ -165,7 +165,7 @@ impl Player {
             self.walk_speed
         };
         if self.sprint {
-            speed *= if self.is_flying { 10.0 } else { 1.5 }; // Super fast flight for debugging
+            speed *= if self.is_flying { 50.0 } else { 1.5 }; // Super fast flight for debugging
         }
 
         if self.is_flying {

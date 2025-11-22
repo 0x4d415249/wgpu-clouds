@@ -1,9 +1,11 @@
+pub mod atmosphere;
 pub mod chunk;
 pub mod data;
 pub mod mesher;
 pub mod physics;
 pub mod player;
 pub mod renderer;
+pub mod shader;
 pub mod shader_gen;
 pub mod texture;
 pub mod world;
@@ -16,6 +18,7 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{KeyCode, PhysicalKey};
 use winit::window::{Window, WindowId};
 
+use crate::atmosphere::AtmosphereState;
 use crate::data::GameRegistry;
 use crate::player::Player;
 use crate::renderer::Renderer;
@@ -29,10 +32,10 @@ struct Game {
     renderer: Renderer,
     world: WorldManager,
     player: Player,
+    atmosphere: AtmosphereState,
     mouse_captured: bool,
     show_wireframe: bool,
     last_frame: Instant,
-    accum_time: f32,
     window: Arc<Window>,
     frame_count: u64,
     last_log: Instant,
@@ -65,10 +68,11 @@ impl ApplicationHandler for App {
             renderer.bind_layouts.gen_layout.clone(),
             registry,
             atlas,
-            12,
+            6,
         );
 
-        let player = Player::new([0.0, 150.0, 0.0]); // Start high to see terrain generate
+        let player = Player::new([0.0, 150.0, 0.0]);
+        let atmosphere = AtmosphereState::new();
 
         println!("[DEBUG] Initial Chunk Update...");
         world.update_chunks(player.position.into(), &renderer.device, &renderer.queue);
@@ -77,10 +81,10 @@ impl ApplicationHandler for App {
             renderer,
             world,
             player,
+            atmosphere,
             mouse_captured: false,
             show_wireframe: false,
             last_frame: Instant::now(),
-            accum_time: 0.0,
             window,
             frame_count: 0,
             last_log: Instant::now(),
@@ -128,6 +132,19 @@ impl ApplicationHandler for App {
                             game.renderer.set_wireframe(game.show_wireframe);
                         }
                         KeyCode::F1 => game.renderer.cycle_render_scale(),
+                        // Weather Controls
+                        KeyCode::Digit1 => {
+                            game.atmosphere.target_weather = 0.0;
+                            println!("Weather set to CLEAR");
+                        }
+                        KeyCode::Digit2 => {
+                            game.atmosphere.target_weather = 0.7;
+                            println!("Weather set to RAIN");
+                        }
+                        KeyCode::Digit3 => {
+                            game.atmosphere.target_weather = 1.0;
+                            println!("Weather set to STORM");
+                        }
                         _ => {}
                     }
                 }
@@ -160,7 +177,6 @@ impl ApplicationHandler for App {
                 }
             }
             WindowEvent::RedrawRequested => {
-                // Skip rendering if minimized to prevent crashes
                 let size = game.window.inner_size();
                 if size.width == 0 || size.height == 0 {
                     return;
@@ -170,7 +186,6 @@ impl ApplicationHandler for App {
                 let now = Instant::now();
                 let dt = (now - game.last_frame).as_secs_f32();
                 game.last_frame = now;
-                game.accum_time += dt;
 
                 if now.duration_since(game.last_log).as_secs_f32() >= 1.0 {
                     println!(
@@ -187,6 +202,11 @@ impl ApplicationHandler for App {
                     game.player.update(dt, &game.world);
                 }
 
+                // Update Atmosphere
+                let view_pos = game.player.get_view_pos();
+                let cam_pos = [view_pos.x, view_pos.y, view_pos.z];
+                game.atmosphere.update(dt, cam_pos);
+
                 game.world.update_chunks(
                     game.player.position.into(),
                     &game.renderer.device,
@@ -196,25 +216,23 @@ impl ApplicationHandler for App {
                 // Render
                 match game
                     .renderer
-                    .render(&game.world, &game.player, game.accum_time)
+                    .render(&game.world, &game.player, &game.atmosphere)
                 {
                     Ok(_) => {}
                     Err(wgpu::SurfaceError::Lost) | Err(wgpu::SurfaceError::Outdated) => {
                         game.renderer.resize(game.window.inner_size());
                     }
                     Err(wgpu::SurfaceError::OutOfMemory) => event_loop.exit(),
-                    Err(wgpu::SurfaceError::Timeout) => {} // Ignore timeouts
+                    Err(wgpu::SurfaceError::Timeout) => {}
                     Err(e) => eprintln!("[ERROR] Render failed: {:?}", e),
                 }
 
-                // CRITICAL FIX: Request next frame!
                 game.window.request_redraw();
             }
             _ => {}
         }
     }
 
-    // ALSO CRITICAL: Handle AboutToWait to keep loop spinning
     fn about_to_wait(&mut self, _event_loop: &ActiveEventLoop) {
         if let Some(game) = &self.game {
             game.window.request_redraw();
@@ -238,7 +256,6 @@ impl ApplicationHandler for App {
 
 pub async fn run() {
     let event_loop = EventLoop::new().unwrap();
-    // Use Poll for game loop behavior
     event_loop.set_control_flow(ControlFlow::Poll);
     let mut app = App { game: None };
     let _ = event_loop.run_app(&mut app);
