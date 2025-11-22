@@ -14,8 +14,8 @@ fn cs_rain(@builtin(global_invocation_id) id: vec3<u32>) {
     p.pos += vec4<f32>(velocity * 0.016, 0.0);
 
     let range_h = 60.0;
-    let range_y = 40.0;
-    let center = camera.camera_pos;
+    let range_y = 90.0;
+    let center = camera.camera_pos + vec3<f32>(0.0, 30.0, 0.0);
     let dist = p.pos.xyz - center;
 
     if (dist.x > range_h) { p.pos.x -= range_h * 2.0; }
@@ -49,7 +49,8 @@ fn vs_rain(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u3
     let vel = vec3<f32>(wind_force.x, p.vel.y, wind_force.z);
     let dir = normalize(vel);
 
-    let w = 0.03 * scale;
+    // Made rain significantly thinner
+    let w = 0.015 * scale;
     let h = 0.8 * scale;
     var pos = vec3<f32>(0.0);
     var uv = vec2<f32>(0.0);
@@ -66,9 +67,14 @@ fn vs_rain(@builtin(vertex_index) v_idx: u32, @builtin(instance_index) i_idx: u3
     out.clip_position = camera.view_proj * vec4<f32>(world_pos, 1.0);
     out.uv = uv;
 
+    let bottom_y = center.y - h;
+    let terrain_h = get_terrain_height(center.xz);
+    let terrain_mask = select(1.0, 0.0, bottom_y < terrain_h + 0.5);
+
     let d = distance(center, camera.camera_pos);
     let dist_fade = 1.0 - smoothstep(40.0, 60.0, d);
-    out.alpha = camera.rain * w_data.y * height_mask * dist_fade;
+
+    out.alpha = camera.rain * w_data.y * height_mask * dist_fade * terrain_mask;
     return out;
 }
 
@@ -78,6 +84,9 @@ fn fs_rain(in: RainVertexOutput) -> @location(0) vec4<f32> {
     let x_fade = 1.0 - abs(in.uv.x * 2.0 - 1.0);
     let y_fade = 1.0 - abs(in.uv.y * 2.0 - 1.0);
     let lightning = camera.lightning_color * camera.lightning_intensity * 0.5;
-    let col = vec3<f32>(0.7, 0.8, 0.9) + lightning;
-    return vec4<f32>(col, in.alpha * x_fade * y_fade * 0.6);
+    // Darkened the rain color slightly to match the environment better
+    let col = vec3<f32>(0.6, 0.65, 0.7) + lightning;
+
+    // SIGNIFICANTLY reduced base opacity (0.6 -> 0.25) so it's subtle
+    return vec4<f32>(col, in.alpha * x_fade * y_fade * 0.25);
 }

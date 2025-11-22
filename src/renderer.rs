@@ -47,6 +47,7 @@ pub struct Renderer {
     particle_bind_group: wgpu::BindGroup,
 
     pub render_scale: f32,
+    pub particle_count: u32,
 }
 
 impl Renderer {
@@ -213,7 +214,9 @@ impl Renderer {
             pos: [f32; 4],
             vel: [f32; 4],
         }
-        let particles: Vec<ParticleInit> = (0..20000)
+
+        let particle_count = 100_000;
+        let particles: Vec<ParticleInit> = (0..particle_count)
             .map(|_| {
                 let x = (random_f32(&mut rng_seed) - 0.5) * 80.0;
                 let y = (random_f32(&mut rng_seed) - 0.5) * 60.0;
@@ -386,13 +389,17 @@ impl Renderer {
             cache: None,
         });
 
+        // UPSCALE / POST PROCESS SETUP
         let upscale_mod = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: None,
             source: wgpu::ShaderSource::Wgsl(shader::POST.into()),
         });
+
+        // Add Depth Texture to Upscale Bind Group
         let upscale_l = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             entries: &[
                 wgpu::BindGroupLayoutEntry {
+                    // Color
                     binding: 0,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Texture {
@@ -403,16 +410,30 @@ impl Renderer {
                     count: None,
                 },
                 wgpu::BindGroupLayoutEntry {
+                    // Sampler
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    // Depth (For SSR)
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Depth,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
             ],
             label: None,
         });
+
         let upscale_pll = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&upscale_l],
+            // Added camera_layout so we can reconstruct position for SSR
+            bind_group_layouts: &[&upscale_l, &camera_layout],
             push_constant_ranges: &[],
             label: None,
         });
@@ -487,6 +508,7 @@ impl Renderer {
             }],
             label: None,
         });
+
         let scene_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &upscale_l,
             entries: &[
@@ -497,6 +519,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&depth_view),
                 },
             ],
             label: None,
@@ -531,6 +557,7 @@ impl Renderer {
             depth_bind_group: depth_bg,
             particle_bind_group: particle_bg,
             render_scale,
+            particle_count: particle_count as u32,
         }
     }
 
@@ -595,6 +622,8 @@ impl Renderer {
             min_filter: wgpu::FilterMode::Nearest,
             ..Default::default()
         });
+
+        // Rebind Upscale Group
         let upscale_l = self.upscale_pipeline.get_bind_group_layout(0);
         self.scene_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             layout: &upscale_l,
@@ -606,6 +635,10 @@ impl Renderer {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.depth_view),
                 },
             ],
             label: None,
@@ -695,7 +728,8 @@ impl Renderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(1, &self.texture_bind_group, &[]); // Just to satisfy layout index
             pass.set_bind_group(2, &self.particle_bind_group, &[]);
-            let count = 20000u32.div_ceil(64);
+            // Dispatch more workgroups for more particles
+            let count = self.particle_count.div_ceil(64);
             pass.dispatch_workgroups(count, 1, 1);
         }
 
@@ -782,10 +816,10 @@ impl Renderer {
             pass.set_bind_group(0, &self.camera_bind_group, &[]);
             pass.set_bind_group(1, &self.texture_bind_group, &[]);
             pass.set_bind_group(2, &self.particle_bind_group, &[]);
-            pass.draw(0..4, 0..20000);
+            pass.draw(0..4, 0..self.particle_count);
         }
 
-        // 4. Upscale
+        // 4. Upscale / Post
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Upscale"),
@@ -798,11 +832,12 @@ impl Renderer {
                     },
                     depth_slice: None,
                 })],
-                depth_stencil_attachment: None,
+                //depth_stencil: None,
                 ..Default::default()
             });
             pass.set_pipeline(&self.upscale_pipeline);
             pass.set_bind_group(0, &self.scene_bind_group, &[]);
+            pass.set_bind_group(1, &self.camera_bind_group, &[]); // Bind Camera for SSR
             pass.draw(0..3, 0..1);
         }
 

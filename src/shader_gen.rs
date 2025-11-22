@@ -37,8 +37,8 @@ pub fn generate_wgsl(registry: &GameRegistry) -> String {
     let b_snow = get_id("snow_block");
     let b_log = get_id("oak_log");
     let b_leaves = get_id("oak_leaves");
-    // let b_cactus = get_id("cactus"); // Unused in simplified logic below
 
+    // UPDATED: Uses get_terrain_height() from common.wgsl instead of hardcoded math
     s.push_str(&format!(
         r#"
     struct GenParams {{ chunk_pos: vec3<i32>, seed: u32 }}
@@ -56,9 +56,7 @@ pub fn generate_wgsl(registry: &GameRegistry) -> String {
         let temp = noise2d(vec2<f32>(wx, wz) * 0.001);
         let humid = noise2d(vec2<f32>(wx, wz) * 0.001 + vec2<f32>(100.0, 0.0));
 
-        let h_noise = fbm(vec2<f32>(wx, wz) * 0.005);
-        let mount = smoothstep(0.6, 0.8, temp);
-        let height = mix(60.0 + h_noise * 20.0, 60.0 + h_noise * 80.0, mount);
+        let height = get_terrain_height(vec2<f32>(wx, wz));
 
         var blk = 0u;
 
@@ -114,7 +112,6 @@ pub fn generate_wgsl(registry: &GameRegistry) -> String {
     s.push_str(shader::VOXEL_RENDER);
     s.push_str(shader::SKY_RENDER);
     s.push_str(shader::RAIN);
-    // REMOVED: s.push_str(shader_modules::POST); -> This caused the conflict
 
     s
 }

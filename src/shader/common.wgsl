@@ -65,3 +65,12 @@ fn dither(frag_coord: vec2<f32>) -> f32 {
     let magic = vec3<f32>(0.06711056, 0.00583715, 52.9829189);
     return fract(magic.z * fract(dot(frag_coord, magic.xy)));
 }
+
+// CENTRALIZED TERRAIN HEIGHT
+// Used by: Shader Gen (Compute), Voxel (Wetness check), Rain (Occlusion)
+fn get_terrain_height(p: vec2<f32>) -> f32 {
+    let temp = noise2d(p * 0.001);
+    let h_noise = fbm(p * 0.005);
+    let mount = smoothstep(0.6, 0.8, temp);
+    return mix(60.0 + h_noise * 20.0, 60.0 + h_noise * 80.0, mount);
+}

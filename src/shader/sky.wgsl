@@ -66,7 +66,9 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
     }
 
     // --- Volumetric Clouds ---
-    let plane_noise = noise(camera.camera_pos * 0.001 + view_dir * 10.0) * 30.0;
+    // FIXED: Removed view_dir dependency to prevent "screen overlay" effect.
+    // Used only camera position to determine local cloud layer bounds variations.
+    let plane_noise = noise(camera.camera_pos * 0.001) * 20.0;
     let c_bottom = mix(140.0, 90.0, sky_weather) + plane_noise * 0.5;
     let c_top    = mix(170.0, 250.0, sky_weather) + plane_noise;
 
@@ -78,14 +80,8 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
 
         if (t_max > 0.0 && t_max > t_min) {
             let t_start = max(0.0, t_min);
-            // We clamp the end of the ray to the geometry distance.
-            // This naturally handles "softness" because if the geometry is
-            // very close to the start of the cloud, the ray is short,
-            // accumulating less density -> more transparent.
             let t_end = min(t_max, min(geom_dist, 4000.0));
 
-            // Crucial check: Only render if the geometry is actually BEHIND the cloud start.
-            // If t_end < t_start, the mountain is closer than the cloud layer, so we shouldn't draw clouds on it.
             if (t_end > t_start) {
                 let steps = 40;
                 let step_size = (t_end - t_start) / f32(steps);
@@ -99,13 +95,15 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
                     if (total_trans < 0.01) { break; }
                     let pos = camera.camera_pos + view_dir * t;
 
-                    // REMOVED: The artificial "depth_fade" that was causing the gap/cutoff.
-                    // Now we just integrate density purely based on position.
-
                     let local_w = get_regional_weather(pos.xz).x;
                     let h = (pos.y - c_bottom) / (c_top - c_bottom);
                     let h_fade = smoothstep(0.0, 0.2, h) * smoothstep(1.0, 0.8, h);
-                    let loc_den = get_cloud_density(pos, local_w) * h_fade;
+
+                    // FIXED: Soft blend against geometry
+                    // Fades cloud density as it gets close to the solid land to prevent harsh cuts.
+                    let depth_softness = smoothstep(0.0, 20.0, geom_dist - t);
+
+                    let loc_den = get_cloud_density(pos, local_w) * h_fade * depth_softness;
 
                     if (loc_den > 0.001) {
                         let step_od = loc_den * step_size * den_scale;
@@ -124,17 +122,12 @@ fn fs_sky(in: SkyboxVertexOutput) -> @location(0) vec4<f32> {
                     t += step_size;
                 }
 
-                // Distance fog for the clouds themselves (fades them into the sky color far away)
                 let fog = 1.0 - exp(-t_start * 0.0003);
                 color = color * total_trans + mix(acc_color, color, fog);
             }
         }
     }
 
-    // Output Composition
-    // If looking at Sky (is_sky): Alpha = 1.0 (We replace the black background completely)
-    // If looking at Voxel (!is_sky): Alpha = 1.0 - total_trans (This represents the opacity of the clouds)
     let final_alpha = select(1.0 - total_trans, 1.0, is_sky);
-
     return vec4<f32>(pow(color, vec3<f32>(1.0 / 2.2)), final_alpha);
 }

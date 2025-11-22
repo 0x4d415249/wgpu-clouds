@@ -3,14 +3,24 @@ fn get_regional_weather(world_xz: vec2<f32>) -> vec2<f32> {
     let scroll = vec2<f32>(camera.time * 2.0, 0.0);
     let sample_pos = (world_xz + scroll) * scale;
 
+    // Base large-scale weather pattern
     var w = noise2d(sample_pos);
     w += noise2d(sample_pos * 2.0) * 0.5;
     w = w / 1.5;
-
     w = clamp(w + camera.weather_offset, 0.0, 1.0);
 
-    let rain_amt = smoothstep(0.6, 0.8, w);
-    return vec2<f32>(w, rain_amt);
+    // --- Rain Waves ---
+    // Create smaller, faster moving waves to break up the "boxy" look
+    // We mix high-frequency scrolling noise into the rain threshold
+    let wave_scroll = vec2<f32>(camera.time * 15.0, camera.time * 5.0);
+    let wave_noise = noise2d((world_xz + wave_scroll) * 0.02);
+
+    // Modulate the rain threshold with the wave
+    // This creates a transition zone where rain comes and goes in waves
+    let rain_base = smoothstep(0.5, 0.9, w);
+    let rain_variation = rain_base * (0.7 + 0.3 * wave_noise);
+
+    return vec2<f32>(w, rain_variation);
 }
 
 fn get_sun_pos() -> vec3<f32> {
@@ -45,9 +55,17 @@ fn get_environment_light() -> mat3x3<f32> {
         let fade = smoothstep(-0.2, 0.0, dir.y);
         color *= fade;
     }
+
+    // --- Storm Lighting Fix ---
+    // Made storm lighting significantly brighter so you can see effects
     let storm = clamp(camera.weather_offset + 0.2, 0.0, 1.0);
-    color = mix(color, color * 0.1, storm);
-    ambient = mix(ambient, ambient * 0.3, storm);
+
+    // Instead of multiplying by 0.1 (very dark), we multiply by 0.3
+    color = mix(color, color * 0.3, storm);
+
+    // Increased ambient light during storms from 0.3 to 0.6 so voxels aren't black
+    ambient = mix(ambient, ambient * 0.6, storm);
+
     return mat3x3<f32>(dir, color, ambient);
 }
 
@@ -64,7 +82,8 @@ fn get_sky_color(view_dir: vec3<f32>, sun_dir: vec3<f32>, weather: f32) -> vec3<
         sky_h = mix(night_h, mix(set_h, day_h, t), t);
     } else if (sun_h <= -0.2) { sky_z = night_z; sky_h = night_h; }
 
-    let storm_dark = mix(1.0, 0.15, weather);
+    // Lightened the storm sky slightly so it's less oppressive
+    let storm_dark = mix(1.0, 0.3, weather);
     sky_z *= storm_dark; sky_h *= storm_dark;
     let horizon = pow(1.0 - max(view_dir.y, 0.0), 3.0);
     return mix(sky_z, sky_h, horizon);
