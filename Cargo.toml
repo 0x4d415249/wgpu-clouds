@@ -1,0 +1,11 @@
+[package]
+name = "gpu-maricraft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+bytemuck = { version = "1.24.0", default-features = false, features = ["derive"] }
+glam = { version = "0.30.9", default-features = false, features = ["std"] }
+pollster = { version = "0.4.0", default-features = false }
+wgpu = { version = "27.0.1", default-features = false, features = ["vulkan", "wgsl"] }
+winit = { version = "0.30.12", default-features = false, features = ["rwh_06", "wayland"] }
