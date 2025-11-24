@@ -2,6 +2,11 @@
 const CHUNK_SIZE: u32 = 64u;
 const TOTAL_VOXELS_INTS: u32 = 65536u; // 64^3 / 4
 
+// FIX: Added constants to match Rust side for bounds checking
+const MAX_FACES: u32 = 60000u;
+const MAX_VERTICES: u32 = MAX_FACES * 4u;
+const MAX_INDICES: u32 = MAX_FACES * 6u;
+
 struct GlobalUniforms {
     view_proj: mat4x4<f32>,
     inv_view_proj: mat4x4<f32>,
@@ -160,8 +165,14 @@ fn mesh(@builtin(global_invocation_id) global_id: vec3<u32>) {
         let nz = u32(i32(z) + n.z);
 
         if (get_voxel_atomic(nx, ny, nz) == 0u) {
+            // FIX: ATOMIC RESERVE AND BOUNDS CHECK
             let v_idx = atomicAdd(&mesh_meta.vertex_counter, 4u);
             let i_idx = atomicAdd(&draw_args.index_count, 6u);
+
+            if (v_idx + 4u > MAX_VERTICES || i_idx + 6u > MAX_INDICES) {
+                // Buffer full! Undo increments? No, just abort write to avoid corruption.
+                return;
+            }
 
             var dx = vec3<f32>(0.0); var dy = vec3<f32>(0.0);
             if (abs(n.y) > 0) { dx = vec3(0.0, 0.0, 1.0); dy = vec3(1.0, 0.0, 0.0); }

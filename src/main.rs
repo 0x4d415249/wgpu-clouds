@@ -13,7 +13,8 @@ const TOTAL_VOXELS: usize = (CHUNK_SIZE * CHUNK_SIZE * CHUNK_SIZE) as usize;
 const VOXEL_INTS: usize = TOTAL_VOXELS / 4; // Packed 4 voxels per u32
 
 // Memory Optimization
-const MAX_FACES_PER_CHUNK: usize = 30_000;
+// FIX: Increased from 30,000 to 60,000 to prevent buffer overflows in complex chunks
+const MAX_FACES_PER_CHUNK: usize = 60_000;
 const MAX_VERTICES: usize = MAX_FACES_PER_CHUNK * 4;
 const MAX_INDICES: usize = MAX_FACES_PER_CHUNK * 6;
 
